@@ -1,0 +1,32 @@
+/*
+ * 桌面宠物窗口的全局基线。
+ *
+ * 窗口是「透明 + 无边框」的（DEV.md §3.1），所以这里必须保证
+ * 从 html/body 到 #app 整条链路都没有背景色、没有边距、没有滚动条 ——
+ * 任何一处漏了不透明背景，角色外面就会出现一个难看的方块。
+ */
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  /* 透明窗口里默认光标 + 禁掉文本选择，避免拖动角色时误选中 */
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: 'Microsoft YaHei', system-ui, sans-serif;
+  /* 关闭整页滚动回弹 */
+  overscroll-behavior: none;
+}
+
+* {
+  box-sizing: border-box;
+}

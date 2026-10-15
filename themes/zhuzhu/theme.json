@@ -1,0 +1,121 @@
+{
+  "id": "zhuzhu",
+  "name": "奇魔猪",
+  "version": "0.1.0",
+
+  "assets": {
+    "base": "base.png",
+    "expressions": {}
+  },
+
+  "scheduler": {
+    "idleTimeoutMs": 6000,
+    "defaultCooldownMs": 800
+  },
+
+  "baseState": {
+    "voiceActive": "speaking",
+    "silent": "idle"
+  },
+
+  "eventToAction": {
+    "idle": "idle",
+    "voice_start": "speaking",
+    "neutral": "speaking",
+    "happy": "happy",
+    "angry": "angry",
+    "sad": "sad",
+    "surprised": "surprised",
+    "laugh": "laugh"
+  },
+
+  "actions": {
+    "idle": {
+      "priority": 0,
+      "loop": true,
+      "durationMs": null,
+      "cooldownMs": 0,
+      "params": {
+        "duration": "13s",
+        "tilt": "3.5deg",
+        "drift": "14px",
+        "bob": "5px",
+        "breath": "0.028"
+      }
+    },
+
+    "speaking": {
+      "priority": 1,
+      "loop": true,
+      "durationMs": null,
+      "cooldownMs": 0,
+      "params": {
+        "duration": "1.5s",
+        "tilt": "1.6deg",
+        "drift": "3px",
+        "bob": "4px",
+        "breath": "0.016"
+      }
+    },
+
+    "happy": {
+      "priority": 3,
+      "loop": false,
+      "durationMs": 900,
+      "cooldownMs": 1200,
+      "params": {
+        "duration": "900ms",
+        "bob": "26px",
+        "tilt": "5deg"
+      }
+    },
+
+    "angry": {
+      "priority": 3,
+      "loop": false,
+      "durationMs": 700,
+      "cooldownMs": 1500,
+      "params": {
+        "duration": "700ms",
+        "shake": "7px",
+        "tilt": "2.5deg"
+      }
+    },
+
+    "sad": {
+      "priority": 2,
+      "loop": false,
+      "durationMs": 2200,
+      "cooldownMs": 2500,
+      "params": {
+        "duration": "2200ms",
+        "sink": "18px",
+        "tilt": "7deg"
+      }
+    },
+
+    "surprised": {
+      "priority": 4,
+      "loop": false,
+      "durationMs": 800,
+      "cooldownMs": 1500,
+      "params": {
+        "duration": "800ms",
+        "bob": "30px",
+        "pop": "1.12"
+      }
+    },
+
+    "laugh": {
+      "priority": 4,
+      "loop": false,
+      "durationMs": 1400,
+      "cooldownMs": 1800,
+      "params": {
+        "duration": "1400ms",
+        "bob": "16px",
+        "tilt": "4deg"
+      }
+    }
+  }
+}

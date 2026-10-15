@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "直播宠物",
+  "version": "0.1.0",
+  "identifier": "com.livestreampet.zhuzhu",
+
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "直播宠物 · 奇魔猪",
+
+        "width": 160,
+        "height": 160,
+        "resizable": false,
+        "center": true,
+
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+
+        "skipTaskbar": false,
+        "alwaysOnTop": false,
+
+        "dragDropEnabled": false,
+        "visible": false
+      }
+    ],
+
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

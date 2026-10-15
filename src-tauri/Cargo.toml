@@ -1,0 +1,61 @@
+[package]
+name = "livestream-pet-zhuzhu"
+version = "0.1.0"
+description = "直播宠物 · 本地语音驱动的 PC 直播虚拟伴侣"
+authors = ["livestream-pet"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+# 命名成显式的 crate 名，供 bin 与 examples 引用（crate 名带横线，这里用下划线）
+name = "livestream_pet_zhuzhu"
+path = "src/lib.rs"
+
+[[bin]]
+name = "livestream-pet-zhuzhu"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 音频采集与跨线程传递
+cpal = "0.18"
+crossbeam-channel = "0.5"
+
+# 本地语音推理（VAD + SenseVoice）
+#
+# 这里用的是 vendor 过的副本，而不是 crates.io 版本。
+# 原因见 vendor/sherpa-onnx/src/offline_asr.rs 顶部的补丁说明：
+# 上游把 json 结果里的 lang/emotion/event 三个字段丢掉了，
+# 而 DEV.md §5.4 的情绪识别正需要它们。
+# 补丁只有给结构体补 3 个 #[serde(default)] 字段，没有改 FFI。
+sherpa-onnx = { path = "vendor/sherpa-onnx", features = ["static"] }
+
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+# 仅阶段 0 的命令行原型使用：需要不阻塞主循环的 Ctrl+C 信号
+ctrlc = "3"
+
+[profile.dev]
+# 音频路径对实时性敏感，debug 下完全不优化会让回调里的小函数调用变得很重
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+# 体积优化的初步取值。DEV.md 要求阶段 4 用实际构建数据再决定最终参数，
+# 因此这里不预先承诺体积指标，只先给出一个合理起点。
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

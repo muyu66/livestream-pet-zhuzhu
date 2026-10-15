@@ -1,0 +1,323 @@
+/* ============================================================================
+ * 单 PNG 程序动画（DEV.md §4）
+ *
+ * 只有一张透明 PNG，所以所有动作都是「整张图的运动模拟」，
+ * 不宣称能实现真实的眼球转动或头部独立运动。
+ *
+ * 结构：
+ *   .pet-motion  外层 —— 承载动作动画（位移 / 旋转 / 放大）
+ *   .pet-breathe 内层 —— 常驻的呼吸缩放，与动作动画叠加
+ *
+ * 所有数值都通过 CSS 自定义属性注入（由 theme.json 提供），
+ * 这里只写运动结构，不写死具体幅度。
+ * ========================================================================== */
+
+.pet-motion {
+  /* 以角色底部为轴心旋转，倾斜时像站在桌面上而不是悬空打转 */
+  transform-origin: 50% 88%;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.pet-breathe {
+  transform-origin: 50% 88%;
+  width: 100%;
+  height: 100%;
+  animation: pet-breathe 4.2s ease-in-out infinite;
+  will-change: transform;
+}
+
+.pet-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* 拖动角色时不要选中/长按弹出图片菜单 */
+  user-select: none;
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- 呼吸循环 */
+
+@keyframes pet-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(calc(1 + var(--pet-breath, 0.02)));
+  }
+}
+
+/* -------------------------------------------------------------------- idle
+ * 「四处张望」的近似：左倾停顿 → 回中 → 右倾停顿 → 回中 → 轻微起伏。
+ * 每个动作后面保留一段「平台」（相邻关键帧变换值相同），
+ * 使画面短暂的静止一下，避免机械式的匀速连续摆动（DEV.md §4.2）。
+ * 总时长约 13s，足够慢，看久了不烦。
+ */
+@keyframes pet-idle {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  /* 缓缓转向左侧 */
+  5% {
+    transform: translate3d(calc(var(--pet-drift, 14px) * -1), calc(var(--pet-bob, 5px) * -0.6), 0)
+      rotate(calc(var(--pet-tilt, 3.5deg) * -1)) scale(1);
+  }
+  /* 停住看一会儿 */
+  14% {
+    transform: translate3d(calc(var(--pet-drift, 14px) * -1), calc(var(--pet-bob, 5px) * -0.6), 0)
+      rotate(calc(var(--pet-tilt, 3.5deg) * -1)) scale(1);
+  }
+  /* 回到中间 */
+  22% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  28% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  /* 缓缓转向右侧 */
+  40% {
+    transform: translate3d(var(--pet-drift, 14px), calc(var(--pet-bob, 5px) * -0.5), 0)
+      rotate(var(--pet-tilt, 3.5deg)) scale(1);
+  }
+  /* 停住看一会儿 */
+  49% {
+    transform: translate3d(var(--pet-drift, 14px), calc(var(--pet-bob, 5px) * -0.5), 0)
+      rotate(var(--pet-tilt, 3.5deg)) scale(1);
+  }
+  /* 回到中间 */
+  57% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  64% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  /* 朝左下微微探头，配合一次呼吸式起伏 */
+  78% {
+    transform: translate3d(calc(var(--pet-drift, 14px) * -0.5), calc(var(--pet-bob, 5px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 3.5deg) * 0.5)) scale(1);
+  }
+  90% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+}
+
+/* --------------------------------------------------------------- speaking
+ * 说话时的节奏性浮动：比 idle 快、幅度小，像在跟着语气起伏。
+ */
+@keyframes pet-speaking {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  20% {
+    transform: translate3d(calc(var(--pet-drift, 3px) * -1), calc(var(--pet-bob, 4px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 1.6deg) * -1));
+  }
+  45% {
+    transform: translate3d(calc(var(--pet-drift, 3px) * 0.5), calc(var(--pet-bob, 4px) * -0.35), 0)
+      rotate(calc(var(--pet-tilt, 1.6deg) * 0.4));
+  }
+  70% {
+    transform: translate3d(var(--pet-drift, 3px), calc(var(--pet-bob, 4px) * -0.85), 0)
+      rotate(var(--pet-tilt, 1.6deg));
+  }
+}
+
+/* ------------------------------------------------------------------- happy
+ * 短促向上弹跳，随后带一点回弹落回原位。
+ */
+@keyframes pet-happy {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  18% {
+    transform: translate3d(0, calc(var(--pet-bob, 26px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 5deg) * -1)) scale(1.04);
+  }
+  38% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(0.985);
+  }
+  55% {
+    transform: translate3d(0, calc(var(--pet-bob, 26px) * -0.28), 0) rotate(0deg) scale(1.01);
+  }
+  78% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+}
+
+/* ------------------------------------------------------------------- angry
+ * 短时间高频小幅震动，幅度逐渐衰减，避免看起来像卡帧。
+ */
+@keyframes pet-angry {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  8% {
+    transform: translate3d(calc(var(--pet-shake, 7px) * -1), 0, 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * -1));
+  }
+  19% {
+    transform: translate3d(var(--pet-shake, 7px), 0, 0) rotate(var(--pet-tilt, 2.5deg));
+  }
+  30% {
+    transform: translate3d(calc(var(--pet-shake, 7px) * -0.85), 0, 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * -0.85));
+  }
+  41% {
+    transform: translate3d(calc(var(--pet-shake, 7px) * 0.85), 0, 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * 0.85));
+  }
+  52% {
+    transform: translate3d(calc(var(--pet-shake, 7px) * -0.6), 0, 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * -0.6));
+  }
+  63% {
+    transform: translate3d(calc(var(--pet-shake, 7px) * 0.6), 0, 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * 0.6));
+  }
+  74% {
+    transform: translate3d(calc(var(--pet-shake, 7px) * -0.3), 0, 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * -0.3));
+  }
+  85% {
+    transform: translate3d(calc(var(--pet-shake, 7px) * 0.3), 0, 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * 0.3));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+/* --------------------------------------------------------------------- sad
+ * 缓慢下沉并轻微倾斜，停一会儿再慢慢回来。
+ */
+@keyframes pet-sad {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  30% {
+    transform: translate3d(0, var(--pet-sink, 18px), 0) rotate(calc(var(--pet-tilt, 7deg) * -1))
+      scale(0.985);
+  }
+  68% {
+    transform: translate3d(0, calc(var(--pet-sink, 18px) * 0.94), 0)
+      rotate(calc(var(--pet-tilt, 7deg) * -0.92)) scale(0.985);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+}
+
+/* --------------------------------------------------------------- surprised
+ * 快速弹起并略微放大，然后落回。
+ */
+@keyframes pet-surprised {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  14% {
+    transform: translate3d(0, calc(var(--pet-bob, 30px) * -1), 0) scale(var(--pet-pop, 1.12));
+  }
+  32% {
+    transform: translate3d(0, calc(var(--pet-bob, 30px) * -0.45), 0)
+      scale(calc(1 + (var(--pet-pop, 1.12) - 1) * 0.5));
+  }
+  58% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* -------------------------------------------------------------------- laugh
+ * 有节奏的连续轻微弹跳，两次一组，像笑到抖肩膀。
+ */
+@keyframes pet-laugh {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  10% {
+    transform: translate3d(0, calc(var(--pet-bob, 16px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 4deg) * -1));
+  }
+  22% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  34% {
+    transform: translate3d(0, calc(var(--pet-bob, 16px) * -0.8), 0)
+      rotate(calc(var(--pet-tilt, 4deg) * 0.8));
+  }
+  46% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  58% {
+    transform: translate3d(0, calc(var(--pet-bob, 16px) * -0.6), 0)
+      rotate(calc(var(--pet-tilt, 4deg) * -0.6));
+  }
+  70% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  82% {
+    transform: translate3d(0, calc(var(--pet-bob, 16px) * -0.35), 0)
+      rotate(calc(var(--pet-tilt, 4deg) * 0.35));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+/* ------------------------------------------------------- 动作 → 动画绑定
+ * idle / speaking 是循环动作，靠 `infinite`；其余是一次性动作，靠 scheduler
+ * 监听 animationend 收尾。所有一次性动作的最后一帧都回到中性姿态，
+ * 因此即使动画结束到状态切换之间有一帧间隙，角色也不会停在奇怪的姿势上。
+ */
+
+.pet-motion.is-idle {
+  animation: pet-idle var(--pet-duration, 13s) ease-in-out infinite;
+}
+
+.pet-motion.is-speaking {
+  animation: pet-speaking var(--pet-duration, 1.5s) ease-in-out infinite;
+}
+
+.pet-motion.is-happy {
+  animation: pet-happy var(--pet-duration, 900ms) cubic-bezier(0.32, 1.35, 0.5, 1) 1 both;
+}
+
+.pet-motion.is-angry {
+  animation: pet-angry var(--pet-duration, 700ms) linear 1 both;
+}
+
+.pet-motion.is-sad {
+  animation: pet-sad var(--pet-duration, 2200ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-surprised {
+  animation: pet-surprised var(--pet-duration, 800ms) cubic-bezier(0.2, 1.5, 0.45, 1) 1 both;
+}
+
+.pet-motion.is-laugh {
+  animation: pet-laugh var(--pet-duration, 1400ms) ease-in-out 1 both;
+}
+
+/* 用户系统设置了「减少动态效果」时，弱化运动但仍保留状态可见性 */
+@media (prefers-reduced-motion: reduce) {
+  .pet-motion.is-idle,
+  .pet-motion.is-speaking {
+    animation-duration: 6s;
+  }
+  .pet-breathe {
+    animation: none;
+  }
+}

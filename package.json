@@ -1,0 +1,26 @@
+{
+  "name": "livestream-pet-zhuzhu",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "直播宠物 · 本地语音驱动的 PC 直播虚拟伴侣",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "tauri": "tauri",
+    "fetch-models": "bash tools/fetch-models.sh"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "vue": "^3.5.44"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.3",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vue-tsc": "^3.3.13"
+  }
+}
