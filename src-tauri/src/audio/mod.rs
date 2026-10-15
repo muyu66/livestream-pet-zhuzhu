@@ -18,4 +18,4 @@ pub mod worker;
 mod asr;
 mod vad;
 
-pub use worker::{AudioWorker, DebugFn, EmitFn};
+pub use worker::{AudioWorker, DebugFn, EmitFn, StatusFn, WorkerStatus};

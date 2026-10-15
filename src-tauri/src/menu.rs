@@ -12,11 +12,14 @@
 
 use serde::Serialize;
 
+/// 选择麦克风的菜单项 id
+pub const MENU_CHOOSE_MIC: &str = "choose-mic";
 /// 置顶开关的菜单项 id
 pub const MENU_TOGGLE_TOPMOST: &str = "toggle-topmost";
 /// 退出的菜单项 id
 pub const MENU_QUIT: &str = "quit";
 
+const LABEL_CHOOSE_MIC: &str = "选择麦克风";
 const LABEL_TOPMOST_ENABLE: &str = "置顶窗口";
 const LABEL_TOPMOST_DISABLE: &str = "取消置顶";
 const LABEL_QUIT: &str = "退出";
@@ -30,9 +33,16 @@ pub struct MenuEntry {
 
 /// 按当前状态生成菜单项。
 ///
-/// 顺序即显示顺序：置顶在前，退出在后（退出是破坏性操作，放最后更安全）。
+/// 顺序即显示顺序：设置类在前，退出在后（退出是破坏性操作，放最后更安全）。
+///
+/// 「选择麦克风」排在最前：它是这里面唯一**必须由用户做一次**的决定
+/// （没选过的话语气分析就是不工作的），另外两项是随时可以再改的偏好。
 pub fn entries(always_on_top: bool) -> Vec<MenuEntry> {
     vec![
+        MenuEntry {
+            id: MENU_CHOOSE_MIC.to_owned(),
+            label: LABEL_CHOOSE_MIC.to_owned(),
+        },
         MenuEntry {
             id: MENU_TOGGLE_TOPMOST.to_owned(),
             label: if always_on_top {
@@ -56,9 +66,9 @@ mod tests {
     #[test]
     fn topmost_label_follows_state() {
         let off = entries(false);
-        assert_eq!(off[0].label, "置顶窗口");
+        assert_eq!(off[1].label, "置顶窗口");
         let on = entries(true);
-        assert_eq!(on[0].label, "取消置顶");
+        assert_eq!(on[1].label, "取消置顶");
     }
 
     #[test]
@@ -66,10 +76,12 @@ mod tests {
         // id 是前后端分发的契约，顺序是显示顺序，两者都不该随状态变化
         for state in [false, true] {
             let items = entries(state);
-            assert_eq!(items.len(), 2);
-            assert_eq!(items[0].id, MENU_TOGGLE_TOPMOST);
-            assert_eq!(items[1].id, MENU_QUIT);
-            assert_eq!(items[1].label, "退出");
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0].id, MENU_CHOOSE_MIC);
+            assert_eq!(items[0].label, "选择麦克风");
+            assert_eq!(items[1].id, MENU_TOGGLE_TOPMOST);
+            assert_eq!(items[2].id, MENU_QUIT);
+            assert_eq!(items[2].label, "退出");
         }
     }
 }

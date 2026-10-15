@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mic-picker",
+  "description": "麦克风选择框的权限。和主窗口、调试窗口分开列：权限是按窗口 label 授予的，这个框只需要收发事件与调用命令。漏了这个文件，窗口里连 invoke 都发不出去 —— 表现是界面能显示、点一下毫无反应。",
+  "windows": ["mic-picker"],
+  "permissions": [
+    "core:default"
+  ]
+}

@@ -26,7 +26,9 @@
   /* 以角色底部为轴心旋转，倾斜时像站在桌面上而不是悬空打转 */
   transform-origin: 50% 88%;
   will-change: transform;
-  backface-visibility: hidden;
+  /* 必须是 visible：flip 是绕 Y 轴的真 3D 旋转，过了 90 度背面朝前，
+     hidden 会让角色在中途整个消失（只剩背景）。原来是 hidden，为 flip 改的。 */
+  backface-visibility: visible;
 }
 
 .pet-breathe {
@@ -44,6 +46,10 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
+  /* 「朝向」开关（表情的 mirror）：镜像挂在**图**上，不挂在 .pet-motion 上 ——
+     动作动画写的就是 .pet-motion 的 transform，挂在那里会被每一步的动画覆盖掉。
+     镜像是绕图自己的中线（也就是角色框的中线）翻的，和动作的变换原点同一条线。 */
+  transform: scaleX(var(--pet-mirror, 1));
   /* 拖动角色时不要选中/长按弹出图片菜单 */
   user-select: none;
   -webkit-user-drag: none;
@@ -72,9 +78,11 @@
  *
  * 约定（改关键帧的人请先读这几条）：
  *
- * 1. **变换的书写顺序必须是 `translate3d() rotate() scaleX() scaleY()`**（或 `scale()`）。
- *    CSS 从右往左作用到点上，也就是先缩放、再旋转、最后位移；fit_check.py 就是按这个
- *    复合顺序把变换作用到角色轮廓上算越界像素的，换顺序算出来的数就不对了。
+ * 1. **变换的书写顺序必须是 `[perspective()] translate3d() rotate() rotateY() scaleX() scaleY()`**
+ *    （`scaleX/scaleY` 可写成 `scale()`；没用到的函数可以整段省掉）。
+ *    CSS 从右往左作用到点上，也就是先缩放、再转 Y（3D 翻转）、再在平面内旋转、最后位移、
+ *    最后才是透视投影；fit_check.py 就是按这个复合顺序把变换作用到角色轮廓上算越界像素的，
+ *    换顺序算出来的数就不对了。`perspective()` 只能写在最前面（它是投影，必须是最后一步）。
  * 2. **每一帧的最后一帧（100%）必须回到中性姿态**。动作演完到下一步之间可能差一帧，
  *    停在半路会让角色以奇怪的姿势闪一下。`hold` 全程中性也是这个道理。
  * 3. **关键帧之间保留「平台」**（相邻两帧数值相同）画面才会短暂静止，
@@ -158,7 +166,11 @@
 }
 
 /* ------------------------------------------------------------------- float
- * 节奏性浮动：上下小幅浮动两次，比 sway 快、幅度小，像在跟着语气起伏。
+ * 说话的底拍：快速向上浮起两次，下落走重力（越落越快），所以听起来是「说得很起劲」，
+ * 而不是温柔地飘。它是全库唯一一个**专门为 lively 调过幅度**的动作（2026-10-16）：
+ * `idle` 平静、`speaking` 眉飞色舞，这一组对比主要就落在这里 —— 幅度比待机大（bob 9px
+ * 对 sway 的 3.5px）、节奏快（1200ms 对 6000ms）。theme.json 的 `_幅度_说明` 里记了这条例外。
+ * 两个下落段都不许过冲：角色下沿本来离窗口边只剩两三个像素，往下多走一点就被切掉了。
  */
 @keyframes pet-float {
   0%,
@@ -166,16 +178,20 @@
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   20% {
-    transform: translate3d(calc(var(--pet-drift, 2px) * -1), calc(var(--pet-bob, 3.5px) * -1), 0)
-      rotate(calc(var(--pet-tilt, 1.1deg) * -1));
+    /* 从最高点落回来：越落越快 */
+    animation-timing-function: linear(0, 0.2 32%, 0.6 66%, 1);
+    transform: translate3d(calc(var(--pet-drift, 3px) * -1), calc(var(--pet-bob, 9px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 2.4deg) * -1));
   }
   45% {
-    transform: translate3d(calc(var(--pet-drift, 2px) * 0.5), calc(var(--pet-bob, 3.5px) * -0.35), 0)
-      rotate(calc(var(--pet-tilt, 1.1deg) * 0.4));
+    transform: translate3d(calc(var(--pet-drift, 3px) * 0.5), calc(var(--pet-bob, 9px) * -0.35), 0)
+      rotate(calc(var(--pet-tilt, 2.4deg) * 0.4));
   }
   70% {
-    transform: translate3d(var(--pet-drift, 2px), calc(var(--pet-bob, 3.5px) * -0.85), 0)
-      rotate(var(--pet-tilt, 1.1deg));
+    /* 最后一次落下：先快后收，落到中性就停住等下一拍 */
+    animation-timing-function: linear(0, 0.3 42%, 0.78 76%, 1);
+    transform: translate3d(var(--pet-drift, 3px), calc(var(--pet-bob, 9px) * -0.85), 0)
+      rotate(var(--pet-tilt, 2.4deg));
   }
 }
 
@@ -194,16 +210,21 @@
 
 /* --------------------------------------------------------------------- hop
  * 短促向上弹跳，随后恢复：跳起 → 落地压一下 → 余弹一次 → 站定。
+ * 下落那一段用「越落越快」的曲线（重力），落地那一段用弹簧（压下去再弹起来）。
  */
 @keyframes pet-hop {
   0% {
     transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
   }
   18% {
+    /* 从最高点往下掉：加速下落 */
+    animation-timing-function: linear(0, 0.16 28%, 0.52 60%, 1);
     transform: translate3d(0, calc(var(--pet-bob, 18px) * -1), 0)
       rotate(calc(var(--pet-tilt, 3.5deg) * -1)) scale(1.04);
   }
   38% {
+    /* 落地：余弹一次，略微冲过标称幅度再收住 */
+    animation-timing-function: linear(0, 0.66 24%, 1.05 56%, 0.985 80%, 1);
     transform: translate3d(0, 0, 0) rotate(0deg) scale(0.985);
   }
   55% {
@@ -232,12 +253,16 @@
   }
   /* 窜到最高点，身体拉长 */
   30% {
+    /* 从最高点往下掉：加速下落（和 hop 同一套重力感） */
+    animation-timing-function: linear(0, 0.18 30%, 0.56 64%, 1);
     transform: translate3d(0, calc(var(--pet-bob, 24px) * -1), 0)
       rotate(calc(var(--pet-tilt, 2.8deg) * -1))
       scaleX(calc(1 - var(--pet-squash, 0.055) * 0.5)) scaleY(calc(1 + var(--pet-squash, 0.055) * 0.6));
   }
   /* 落地受挤压 */
   52% {
+    /* 落地：从压扁弹回来时冲过一点 */
+    animation-timing-function: linear(0, 0.6 22%, 1.06 54%, 0.98 80%, 1);
     transform: translate3d(0, 0, 0) rotate(0deg) scaleX(calc(1 + var(--pet-squash, 0.055) * 0.8))
       scaleY(calc(1 - var(--pet-squash, 0.055) * 0.8));
   }
@@ -252,30 +277,44 @@
 
 /* ------------------------------------------------------------------ bounce
  * 连续轻微弹跳：连弹三下，一下比一下轻，像笑到抖肩膀。
+ * 三次触地都用同一条弹簧曲线、每次落地都往上冲过一点 —— 手感全靠这个，
+ * 光靠关键帧数值是看不出「有弹性」的。
  */
 @keyframes pet-bounce {
   0% {
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   10% {
+    /* 重力：最高点往下掉 */
+    animation-timing-function: linear(0, 0.2 32%, 0.6 66%, 1);
     transform: translate3d(0, calc(var(--pet-bob, 11px) * -1), 0)
       rotate(calc(var(--pet-tilt, 2.8deg) * -1));
   }
   22% {
+    /* 触地 → 弹起来，冲过一点 */
+    animation-timing-function: linear(0, 0.72 34%, 1.05 64%, 0.99 84%, 1);
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   34% {
+    /* 重力 */
+    animation-timing-function: linear(0, 0.2 32%, 0.6 66%, 1);
     transform: translate3d(0, calc(var(--pet-bob, 11px) * -0.8), 0)
       rotate(calc(var(--pet-tilt, 2.8deg) * 0.8));
   }
   46% {
+    /* 触地 → 弹起来 */
+    animation-timing-function: linear(0, 0.72 34%, 1.05 64%, 0.99 84%, 1);
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   58% {
+    /* 重力 */
+    animation-timing-function: linear(0, 0.2 32%, 0.6 66%, 1);
     transform: translate3d(0, calc(var(--pet-bob, 11px) * -0.6), 0)
       rotate(calc(var(--pet-tilt, 2.8deg) * -0.6));
   }
   70% {
+    /* 触地 → 弹起来（最后一次最轻） */
+    animation-timing-function: linear(0, 0.72 34%, 1.05 64%, 0.99 84%, 1);
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   82% {
@@ -407,6 +446,8 @@
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   28% {
+    /* 沉到底 → 回升：冲过中线一点点再收住 */
+    animation-timing-function: linear(0, 0.78 36%, 1.06 66%, 0.99 86%, 1);
     transform: translate3d(0, var(--pet-bob, 6px), 0) rotate(var(--pet-tilt, 1.4deg));
   }
   52% {
@@ -433,6 +474,8 @@
       scaleY(calc(1 - var(--pet-squash, 0.07)));
   }
   50% {
+    /* 压扁 → 拉长回弹：冲过标称幅度一点 */
+    animation-timing-function: linear(0, 0.68 28%, 1.07 62%, 0.985 84%, 1);
     transform: translate3d(0, calc(var(--pet-bob, 4px) * -0.5), 0)
       scaleX(calc(1 - var(--pet-squash, 0.07) * 0.5)) scaleY(calc(1 + var(--pet-squash, 0.07) * 0.6));
   }
@@ -453,6 +496,8 @@
     transform: scale(1);
   }
   16% {
+    /* 涨到最大 → 回落：先冲出去再拐回来，比匀速缩回来更「啪」一下 */
+    animation-timing-function: linear(0, 1.05 42%, 0.99 74%, 1);
     transform: scale(var(--pet-pop, 1.08));
   }
   42% {
@@ -463,6 +508,61 @@
   }
   100% {
     transform: scale(1);
+  }
+}
+
+/* -------------------------------------------------------------------- flip
+ * 左右翻转：侧身翻到另一面 → 停一会儿 → 再翻回来。
+ *
+ * 这里是**真 3D**：绕 Y 轴转 `--pet-spin`（默认 -180deg），外面套一层
+ * `perspective()`，所以旋转过程中近侧变大、远侧变小、90 度那一瞬侧对镜头 —— 有立体感，
+ * 不是把图压扁成一条线。转过 180 度时透视除法正好归零（z 回到 0），
+ * 于是停下来那一段是**精确的镜像**（角色身上的东西左右换位），不用额外补 scaleX。
+ *
+ * 两个必须连着改的前提：
+ *   1. `.pet-motion` 的 `backface-visibility` 必须是 visible —— 过了 90 度背面朝前，
+ *      用 hidden 的话角色会在中途整个消失。
+ *   2. fit_check.py 的几何模型认得 `perspective()` + `rotateY()`（透视除法也算了），
+ *      所以「翻转这一瞬有没有越出窗口」仍然是量出来的，不是估的。
+ *
+ * 收尾用了一条弹簧曲线（80% 那一段）：转回来会**冲过正面几度再晃回来**，
+ * 比慢慢停住更像活物。每一步的首尾仍然必须是中性姿态（fit_check.py 会查这条）。
+ */
+@keyframes pet-flip {
+  0% {
+    transform: perspective(var(--pet-persp, 600px)) translate3d(0, 0, 0) rotateY(0deg);
+  }
+  /* 起步：踮一下，转到五分之一 */
+  12% {
+    transform: perspective(var(--pet-persp, 600px))
+      translate3d(0, calc(var(--pet-bob, 6px) * -0.18), 0)
+      rotateY(calc(var(--pet-spin, -180deg) * 0.2));
+  }
+  /* 侧身：正侧对镜头的那一瞬，图被透视压得最窄 */
+  30% {
+    transform: perspective(var(--pet-persp, 600px))
+      translate3d(0, calc(var(--pet-bob, 6px) * -0.45), 0)
+      rotateY(calc(var(--pet-spin, -180deg) * 0.5));
+  }
+  /* 完全翻过去 */
+  46% {
+    transform: perspective(var(--pet-persp, 600px)) translate3d(0, 0, 0)
+      rotateY(var(--pet-spin, -180deg));
+  }
+  /* 停一下，这一小段露的是另一面 */
+  62% {
+    transform: perspective(var(--pet-persp, 600px)) translate3d(0, 0, 0)
+      rotateY(var(--pet-spin, -180deg));
+  }
+  /* 回程：再到侧身那一瞬 */
+  80% {
+    animation-timing-function: linear(0, 0.62 30%, 1.07 62%, 0.975 84%, 1);
+    transform: perspective(var(--pet-persp, 600px))
+      translate3d(0, calc(var(--pet-bob, 6px) * -0.4), 0)
+      rotateY(calc(var(--pet-spin, -180deg) * 0.5));
+  }
+  100% {
+    transform: perspective(var(--pet-persp, 600px)) translate3d(0, 0, 0) rotateY(0deg);
   }
 }
 
@@ -478,11 +578,17 @@
  * 缓动函数是「这段动作是什么性格」的一部分，所以留在这里而不是塞进 theme.json：
  * 配置里该调的是幅度和时长，缓动写在这里改一次就对所有用它的表情生效。
  *
- * **缓动函数不许过冲**：`cubic-bezier(a, b, c, d)` 里 b、d 必须 ≤ 1。
- * 过冲的缓动（比如 `0.32, 1.35, ...`）会让中间某一刻的位移**超过**关键帧上写的值，
- * 而 fit_check.py 只按关键帧取值算越界 —— 那样它报的数就悄悄变成了下限，不再可信。
- * 弹回调子的「余弹」靠多加一两个关键帧做（见 hop 的 38% / 55%），不靠缓动过冲。
- * fit_check.py 会扫这里的 cubic-bezier 参数并把过冲的报成错误。
+ * **弹性缓动可以过冲**（2026-10-16 起）：写 `linear(0, 1.06 55%, 0.98 80%, 1)` 这样的
+ * 弹簧曲线，中间某一刻的位移就会**超过**关键帧上写的值 —— 这正是「落地余弹」的手感，
+ * 不用再靠多加关键帧去凑。代价是越界检查必须跟着看一眼过冲的部分：
+ * fit_check.py 现在会把每段动画按缓动曲线采样一遍（不再只看关键帧那几个点），
+ * 过冲的极值也参与算越界。所以**缓动函数必须能被 fit_check 认得**
+ * （cubic-bezier / linear / ease 系列 / steps 之外它看不懂的会直接报错，
+ * 因为它没法保证自己算的数还是对的）。
+ *
+ * 想给某一段单独换缓动，就把 `animation-timing-function` 写进**那一段起点**的关键帧里
+ * （CSS 的规矩：关键帧里的缓动管的是「从这里到下一帧」这一段）——
+ * hop 的 38%、bounce 的 22% / 46% / 70% 就是这么干的。
  *
  * 另外：**一次性表情的每一步不要超过三秒半左右**。中途来的新表情要等当前这一拍演完
  * 才换（DEV.md §4.4），这一个数就是切换延迟的上限。全库时长在 2026-10-16
@@ -503,7 +609,7 @@
 }
 
 .pet-motion.is-float {
-  animation: pet-float var(--pet-duration, 2000ms) ease-in-out 1 both;
+  animation: pet-float var(--pet-duration, 1200ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-hold {
@@ -548,6 +654,10 @@
 
 .pet-motion.is-pop {
   animation: pet-pop var(--pet-duration, 850ms) cubic-bezier(0.22, 0.9, 0.45, 1) 1 both;
+}
+
+.pet-motion.is-flip {
+  animation: pet-flip var(--pet-duration, 1400ms) ease-in-out 1 both;
 }
 
 /* ----------------------------------------------------------------------------

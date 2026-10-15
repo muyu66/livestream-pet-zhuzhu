@@ -14,6 +14,15 @@ import {
   isPetState,
 } from './types/pet-state'
 import type { PetState } from './types/pet-state'
+import {
+  PET_AUDIO_CHANNEL,
+  PET_LEVEL_CHANNEL,
+  isAudioChoice,
+  isAudioDevice,
+} from './types/audio'
+import type { AudioChoice, AudioDevice, DeviceChoice } from './types/audio'
+import { isDebugLevel } from './types/events'
+import type { DebugLevel } from './types/events'
 
 /**
  * 与 Rust 后端的薄封装。
@@ -185,8 +194,109 @@ export async function emitPetEvent(kind: PetEventKind): Promise<void> {
   await emit(PET_EVENT_CHANNEL, { kind, ts: Date.now() } satisfies PetEvent)
 }
 
+/**
+ * 列出可选的输入设备（选择框的列表）。
+ *
+ * 列表交给 Rust 生成而不是在前端去问浏览器：设备身份是 cpal 的 `DeviceId`，
+ * 只有后端认得出、也只在后端能被打开，前端拿到别的 id 是没用的。
+ */
+export async function listInputDevices(): Promise<AudioDevice[]> {
+  if (!isTauri) return []
+  const { invoke } = await import('@tauri-apps/api/core')
+  const raw = await invoke<unknown>('list_input_devices')
+  if (!Array.isArray(raw)) {
+    console.error('[pet] 后端返回的设备列表不是数组:', raw)
+    return []
+  }
+  // 单条不合法就丢掉那一条，而不是整份丢掉：插了一堆虚拟声卡时，
+  // 一台取不到 id 的设备不该让整个列表打不开
+  return raw.filter(isAudioDevice)
+}
+
+/** 取当前用的是哪只麦克风、什么状态（选择框打开时先要一份） */
+export async function fetchAudioState(): Promise<AudioChoice | null> {
+  if (!isTauri) return null
+  const { invoke } = await import('@tauri-apps/api/core')
+  const raw = await invoke<unknown>('audio_state')
+  if (!isAudioChoice(raw)) {
+    console.error('[pet] 后端返回的音频状态无法解析:', raw)
+    return null
+  }
+  return raw
+}
+
+/**
+ * 选定某只麦克风；`null` = 不监听。
+ *
+ * 调用即生效：后端会写进用户配置、并把采集线程换成这只设备。
+ * 返回调用之后的状态（可能是 `connecting`，要等状态通道报 `listening`）。
+ */
+export async function chooseAudioDevice(
+  device: DeviceChoice | null,
+): Promise<AudioChoice | null> {
+  if (!isTauri) {
+    console.warn('[pet] 非 Tauri 环境，选择麦克风被忽略')
+    return null
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  const raw = await invoke<unknown>('choose_audio_device', { device })
+  return isAudioChoice(raw) ? raw : null
+}
+
+/** 订阅音频状态变化 */
+export async function listenAudioState(
+  handler: (choice: AudioChoice) => void,
+): Promise<Unlisten> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<unknown>(PET_AUDIO_CHANNEL, (incoming) => {
+    if (isAudioChoice(incoming.payload)) handler(incoming.payload)
+  })
+}
+
+/** 订阅实时电平（只在选择框打开时才有数据） */
+export async function listenLevel(handler: (level: DebugLevel) => void): Promise<Unlisten> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<unknown>(PET_LEVEL_CHANNEL, (incoming) => {
+    // 负载与调试面板那条同一个类型，所以校验也共用 isDebugLevel
+    if (isDebugLevel(incoming.payload)) handler(incoming.payload)
+  })
+}
+
+/** 开关实时电平推送，返回后端确认的状态 */
+export async function setMeter(enabled: boolean): Promise<boolean | null> {
+  if (!isTauri) return null
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<boolean>('set_meter', { enabled })
+}
+
+/**
+ * 关闭麦克风选择框。
+ *
+ * 必须走这条命令，**不能自己 `getCurrentWindow().close()`**：
+ * 关窗的语义在 Rust 侧 —— 手上没有可用麦克风时，把它关掉就等于选了「不监听」，
+ * 那份决定要写进用户配置。
+ */
+export async function closeMicPicker(): Promise<void> {
+  if (!isTauri) return
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('close_mic_picker')
+}
+
+/** 打开麦克风选择框（角色窗口的菜单走这里；已开着就会把它拿到前面来） */
+export async function openMicPicker(): Promise<void> {
+  if (!isTauri) {
+    console.warn('[pet] 非 Tauri 环境，麦克风选择框不可用（请用 npm run tauri dev）')
+    return
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('open_mic_picker')
+}
+
 /** 纯浏览器模式下的菜单，仅用于脱离 Rust 验证动画时也能右键 */
 const BROWSER_MENU_ITEMS: MenuEntry[] = [
+  { id: 'choose-mic', label: '选择麦克风' },
   { id: 'toggle-topmost', label: '置顶窗口' },
   { id: 'quit', label: '退出' },
 ]

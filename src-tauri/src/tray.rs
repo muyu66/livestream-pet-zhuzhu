@@ -25,6 +25,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         // 左键不弹菜单，只有右键弹（文档要求「右键托盘图标时显示菜单」）
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
+            menu::MENU_CHOOSE_MIC => {
+                // 这个处理器运行在主线程上，而建窗必须在别的线程做（否则自锁成白屏）。
+                // `spawn_mic_picker` 自己就把建窗丢进了异步任务，这里是安全的。
+                crate::app::spawn_mic_picker(app);
+            }
             menu::MENU_TOGGLE_TOPMOST => {
                 if let Err(err) = crate::app::toggle_always_on_top(app) {
                     log::error!("切换置顶失败: {err}");
@@ -53,8 +58,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 /// 置顶状态变了之后重建托盘菜单。
 ///
 /// 直接整份重建、再 `set_menu` 换掉，而不是保存 `MenuItem` 句柄去 `set_text`：
-/// 后者要把带运行时泛型的句柄塞进全局状态，换来的只是少建两个菜单项，
-/// 不划算。菜单只有两项，重建的开销可以忽略。
+/// 后者要把带运行时泛型的句柄塞进全局状态，换来的只是少建几个菜单项，
+/// 不划算。菜单只有三项，重建的开销可以忽略。
 pub fn refresh_menu(app: &AppHandle) -> tauri::Result<()> {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         // 托盘可能没建起来（build 失败时只记了日志），这不是错误

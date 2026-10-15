@@ -10,12 +10,14 @@ import {
   listenPetEvents,
   listenPetStateRequest,
   listenShutdown,
+  openMicPicker,
   quitApp,
   toggleAlwaysOnTop,
   toggleDebugWindow,
 } from './backend'
 import { loadTheme } from './theme/registry'
 import {
+  MENU_CHOOSE_MIC,
   MENU_QUIT,
   MENU_TOGGLE_TOPMOST,
   type MenuEntry,
@@ -110,6 +112,15 @@ function openMenu(event: MouseEvent) {
 async function onMenuSelect(id: string) {
   if (id === MENU_QUIT) {
     await quitApp()
+    return
+  }
+  if (id === MENU_CHOOSE_MIC) {
+    // 选择框是独立窗口（角色窗口放不下列表），这里只负责叫后端把它弹出来
+    try {
+      await openMicPicker()
+    } catch (err) {
+      console.error('[pet] 打开麦克风选择框失败:', err)
+    }
     return
   }
   if (id === MENU_TOGGLE_TOPMOST) {

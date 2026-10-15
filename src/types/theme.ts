@@ -52,6 +52,10 @@ export interface MotionParams {
   pop?: string
   /** 压缩比例，如 "0.94"（小于 1） */
   squash?: string
+  /** 绕 Y 轴翻转的角度，如 "-180deg"（flip 用；±180 才是完整的翻到另一面） */
+  spin?: string
+  /** 透视距离，如 "600px"（flip 用）。越小立体感越强、变形也越夸张 */
+  persp?: string
 }
 
 /**
@@ -95,6 +99,14 @@ export interface ExpressionConfig {
    * `tools/fit_check.py` 会把相邻同名报成错误。
    */
   motions: MotionName[]
+  /**
+   * 朝向：true = 这个表情左右镜像（贴屏幕右边时让它面朝里）。
+   *
+   * 镜像作用在**图上**（`--pet-mirror`），与动作、呼吸互不干扰，
+   * 所以它不会让动作变形，也不会被任何一步的动画覆盖掉。
+   * 不写就跟随主题级的 `mirror`（默认 false）。
+   */
+  mirror?: boolean
 }
 
 export interface ThemeDefinition {
@@ -121,6 +133,12 @@ export interface ThemeDefinition {
   scheduler: {
     idleTimeoutMs: number
   }
+  /**
+   * 主题级的默认朝向：true = 所有表情都左右镜像（单个表情可以用 `expressions[x].mirror`
+   * 覆盖）。角色该朝哪边通常取决于它被拖到屏幕的哪一侧，所以这是一个「设定」而不是
+   * 某个表情的属性 —— 放在主题层，逐个表情再微调。
+   */
+  mirror?: boolean
   baseState: {
     voiceActive: ExpressionName
     silent: ExpressionName

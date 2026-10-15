@@ -2,13 +2,18 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   emitPetEvent,
+  fetchAudioState,
   isTauri,
+  listenAudioState,
   listenDebug,
   listenPetState,
   requestPetState,
   setDebug,
   toggleDebugWindow,
 } from '../backend'
+// 电平换算只有一份实现，麦克风选择框用的是同一个模块（src/audio/level.ts）
+import { dbfs, levelPercent } from '../audio/level'
+import type { AudioChoice } from '../types/audio'
 import { loadTheme } from '../theme/registry'
 import { EXPRESSION_NAMES, type ExpressionName } from '../types/theme'
 import {
@@ -33,6 +38,8 @@ import type { PetState } from '../types/pet-state'
 
 const state = ref<PetState | null>(null)
 const level = ref<DebugLevel | null>(null)
+/** 用的是哪只麦克风、在不在听。排查「没反应」时要先排除它 —— 不监听时链路上什么都没有 */
+const audio = ref<AudioChoice | null>(null)
 const transcripts = ref<DebugTranscript[]>([])
 /** 独立窗口有的是地方，比原来浮层里的 8 条多留一些，方便回看 */
 const MAX_TRANSCRIPTS = 200
@@ -42,10 +49,13 @@ const unlisteners: Array<() => void> = []
 onMounted(async () => {
   unlisteners.push(await listenPetState((next) => (state.value = next)))
   unlisteners.push(await listenDebug(onDebug))
+  unlisteners.push(await listenAudioState((next) => (audio.value = next)))
   // 打开面板才让后端推数据，关掉就停 —— 正常运行时这条链路是静的
   await setDebug(true)
   // 角色窗口只在状态变化时广播，刚打开时可能什么都没变，主动要一份
   await requestPetState()
+  // 音频状态同理：换了麦克风的时间点往往在面板打开之前
+  audio.value = await fetchAudioState()
   window.addEventListener('keydown', onKeydown)
 })
 
@@ -73,19 +83,6 @@ function onDebug(info: DebugTranscript | DebugLevel) {
   transcripts.value = [info, ...transcripts.value].slice(0, MAX_TRANSCRIPTS)
 }
 
-/** 线性幅度 → dBFS。-60 以下按静音显示，避免 -inf 刷屏 */
-function dbfs(amplitude: number): string {
-  if (amplitude <= 0) return '-∞'
-  return (20 * Math.log10(amplitude)).toFixed(1)
-}
-
-/** dBFS 映射到 0–100 的条形宽度，-60 dBFS 以下算空 */
-function levelPercent(amplitude: number): number {
-  if (amplitude <= 0) return 0
-  const db = 20 * Math.log10(amplitude)
-  return Math.max(0, Math.min(100, ((db + 60) / 60) * 100))
-}
-
 /**
  * 表情按钮 → 标准化事件。
  *
@@ -111,6 +108,31 @@ function triggerExpression(expression: ExpressionName) {
 function emitKind(kind: PetEventKind) {
   void emitPetEvent(kind)
 }
+
+/**
+ * 「语音链路」第一行的文案。
+ *
+ * 说清**两件事**：用的是哪只麦克风、现在到底在不在听。
+ * 这恰恰是「角色没反应」时最先要排除的一环 —— 不监听、设备连不上、正在连接，
+ * 三者表现都是「什么都不动」，但处理方式完全不同。
+ */
+const audioText = computed(() => {
+  const choice = audio.value
+  if (!choice) return '未知'
+  const name = choice.device?.name ?? '不监听'
+  switch (choice.status.kind) {
+    case 'off':
+      return '不监听'
+    case 'connecting':
+      return `${name}（连接中…）`
+    case 'listening':
+      return name
+    case 'need_choice':
+      return '还没选过（右键「选择麦克风」）'
+    case 'failed':
+      return `${name} · 连接失败：${choice.status.reason}`
+  }
+})
 
 const lastEventText = computed(() =>
   state.value?.lastEvent ? `${state.value.lastEvent.kind} @ ${state.value.lastEvent.ts}` : '无',
@@ -180,6 +202,7 @@ const playlist = computed(() => {
       <hr class="debug__sep" />
 
       <p class="debug__label">语音链路</p>
+      <p class="debug__line">麦克风: <b>{{ audioText }}</b></p>
       <p class="debug__line">
         输入电平: <b>{{ level ? dbfs(level.peak) : '—' }}</b> dBFS
         · 有效值 {{ level ? dbfs(level.rms) : '—' }} dBFS

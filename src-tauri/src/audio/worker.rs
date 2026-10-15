@@ -30,6 +30,25 @@ pub type EmitFn = Arc<dyn Fn(PetEvent) + Send + Sync + 'static>;
 /// 是否真的推给前端由装配层决定（调试面板没开时直接丢掉）。
 pub type DebugFn = Arc<dyn Fn(PetDebug) + Send + Sync + 'static>;
 
+/// 采集状态出口。比 `DebugFn` 稀疏得多：一条线程一辈子也就报一两次。
+///
+/// 为什么不能靠 `DebugFn` 代替：那个出口是「调试面板开着才有」的可选数据，
+/// 而「麦克风到底开起来没有」是必须送到装配层的 —— 它决定要不要弹选择框。
+pub type StatusFn = Arc<dyn Fn(WorkerStatus) + Send + Sync + 'static>;
+
+/// 一条采集线程的结局，只报关键的那两件事。
+///
+/// 注意这里**没有**「被要求停止」这一项：用户换麦克风时旧线程必然被停，
+/// 那不是故障，不该报出去（报了会让选择框刚选完就弹回一个「失败」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerStatus {
+    /// 采集真的跑起来了 —— `play()` 已返回，系统开始投递音频。
+    /// 只有走到这一步才算「这只麦克风能用」。
+    Ready { device_name: String },
+    /// 没开起来，或者开着开着断了。字符串是给用户看的说明（含完整因果链）。
+    Failed(String),
+}
+
 /// 主循环里等待音频块的最长时间。既决定停止响应的粒度，
 /// 也决定静音超时检查的轮询频率。
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -38,25 +57,65 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// 调试面板要的是「有没有声音」，不需要波形级刷新率。
 const LEVEL_REPORT_INTERVAL: Duration = Duration::from_millis(100);
 
+/// 「采集流死了」的第二道判据：连续这么久一个音频块都没收到。
+///
+/// 第一道判据是驱动报 `DeviceNotAvailable`（见 `capture::CaptureStream::device_lost`），
+/// 大多数情况够用；但设备被别的程序独占、或驱动悄悄停掉回调时可能一声不吭。
+///
+/// **安静不等于没数据**：WASAPI 在完全静音时也照常按周期投递缓冲区
+/// （`examples/audio_probe.rs` 的 `--level-meter` 正是靠这点观察到「设备在出全 0 的静音」），
+/// 所以「收不到块」才是设备死了，「电平是 0」不是。2 秒 ≈ 200 个缓冲区周期，余量足够。
+const CHUNK_TIMEOUT: Duration = Duration::from_millis(2000);
+
 pub struct AudioWorker {
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
+/// 一次运行的结局。与「出错」分开是因为**被要求停止不是故障**：
+/// 用户换麦克风时旧线程必然被停掉，那不是要说给用户听的事。
+enum Outcome {
+    /// 正常结束，或被要求停止（含在模型加载期间就被叫停）
+    Stopped,
+    Failed(anyhow::Error),
+}
+
 impl AudioWorker {
     /// 启动工作线程。立即返回，模型加载在后台进行。
-    pub fn spawn(emit: EmitFn, debug: DebugFn, config: AudioConfig, models_dir: PathBuf) -> Self {
+    ///
+    /// `device_id` 是要听的那台设备（cpal 的 `DeviceId` 字符串，存在用户配置里）；
+    /// `None` 表示系统默认输入设备，只有命令行原型会这么用。
+    pub fn spawn(
+        emit: EmitFn,
+        debug: DebugFn,
+        status: StatusFn,
+        config: AudioConfig,
+        models_dir: PathBuf,
+        device_id: Option<String>,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
 
         let join = std::thread::Builder::new()
             .name("pet-audio".into())
             .spawn(move || {
-                if let Err(err) = run(&emit, &debug, &stop_for_thread, &config, &models_dir) {
-                    // 用 {:#} 展开 anyhow 的因果链，方便定位是缺模型还是缺麦克风
-                    log::error!("音频线程结束: {err:#}");
-                    // 让前端回到待机，而不是停在最后一个动作上
-                    emit(PetEvent::new(PetEventKind::Idle));
+                match run(
+                    &emit,
+                    &debug,
+                    &status,
+                    &stop_for_thread,
+                    &config,
+                    &models_dir,
+                    device_id.as_deref(),
+                ) {
+                    Outcome::Stopped => {}
+                    Outcome::Failed(err) => {
+                        // 用 {:#} 展开 anyhow 的因果链，方便定位是缺模型还是缺麦克风
+                        log::error!("音频线程结束: {err:#}");
+                        status(WorkerStatus::Failed(format!("{err:#}")));
+                        // 让前端回到待机，而不是停在最后一个动作上
+                        emit(PetEvent::new(PetEventKind::Idle));
+                    }
                 }
             })
             .expect("创建音频线程失败");
@@ -106,26 +165,62 @@ impl Drop for AudioWorker {
     }
 }
 
-/// 流水线主体。返回表示「正常结束」或「出错」。
+/// 流水线主体。
 fn run(
     emit: &EmitFn,
     debug: &DebugFn,
+    status: &StatusFn,
     stop: &Arc<AtomicBool>,
     config: &AudioConfig,
     models_dir: &Path,
+    device_id: Option<&str>,
+) -> Outcome {
+    match run_inner(emit, debug, status, stop, config, models_dir, device_id) {
+        Ok(()) => Outcome::Stopped,
+        Err(err) => Outcome::Failed(err),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_inner(
+    emit: &EmitFn,
+    debug: &DebugFn,
+    status: &StatusFn,
+    stop: &Arc<AtomicBool>,
+    config: &AudioConfig,
+    models_dir: &Path,
+    device_id: Option<&str>,
 ) -> Result<()> {
-    // ---- 1. 先加载模型。失败就尽早报出来，而不是等采集跑起来之后才发现。
+    // ---- 0. 存档里那台设备还在不在。放在模型加载**之前**问，
+    //      否则「麦克风被拔了」这件事要等一秒多才报出来，那期间的界面像死了一样。
+    //      只问不建流：真正的解析与打开在下面那条线程上做（cpal 的规矩）。
+    if let Some(id) = device_id {
+        if !capture::device_is_available(id) {
+            anyhow::bail!("存档的麦克风现在找不到了（可能被拔掉、换了 USB 口或改名了）: {id}");
+        }
+    }
+
+    // ---- 1. 加载模型。失败就尽早报出来，而不是等采集跑起来之后才发现。
     log::info!("正在加载本地语音模型…");
     let load_started = Instant::now();
     let vad = vad::Vad::new(&config.vad, config.sample_rate, models_dir)?;
     let recognizer = asr::Recognizer::new(&config.recognizer, config.sample_rate, models_dir)?;
     log::info!("模型加载完成，总耗时 {:.0} ms", load_started.elapsed().as_millis());
 
+    // 模型加载是不打断的（几秒的 C++ 推理初始化，没有中途放弃的接口），
+    // 所以在这之后补一次停止检查：用户在这期间点了别的设备时，
+    // 这条线程应该安静退场，而不是把麦克风开起来再关掉 ——
+    // 那会与新的那条流短暂地同时占着设备。
+    if stop.load(Ordering::Relaxed) {
+        log::info!("加载模型期间收到停止信号，不再打开麦克风");
+        return Ok(());
+    }
+
     let mut stabilizer = Stabilizer::new(config.stability.clone(), Instant::now());
 
     // ---- 2. 打开麦克风。流由本线程持有，退出时在这里析构。
     let (tx, rx) = bounded::<AudioChunk>(capture::CAPTURE_CHANNEL_CAPACITY);
-    let capture = capture::build_input_stream(tx)?;
+    let capture = capture::build_input_stream(tx, device_id)?;
     log::info!(
         "麦克风: {}（{} Hz, {} 声道, {:?}）",
         capture.device_name,
@@ -151,6 +246,12 @@ fn run(
     capture.play()?;
     log::info!("开始聆听（静音 {} ms 后进入待机）", config.stability.idle_timeout_ms);
 
+    // 到这一步才算「这只麦克风能用」：设备打开了、流也真的跑起来了。
+    // 装配层收到它才会把状态置成「正在聆听」，也才不会弹选择框。
+    status(WorkerStatus::Ready {
+        device_name: capture.device_name.clone(),
+    });
+
     let mut session = Session::new(
         config,
         vad.window_size(),
@@ -159,14 +260,38 @@ fn run(
     );
 
     // ---- 3. 主循环
+    //
+    // 掉线是**记下来再跳出循环**，不是当场 `bail!`：收尾那段要把「驱动错误通知」
+    // 与「未接住的音频块」的次数报出来，掉线时恰恰最需要这两个数
+    // （它们能区分「设备没了」和「我们处理不过来」）。直接 return 会把它们丢掉。
+    let mut failure: Option<anyhow::Error> = None;
+    let mut last_chunk = Instant::now();
     loop {
         if stop.load(Ordering::Relaxed) {
             log::info!("收到停止信号，结束音频采集");
             break;
         }
 
+        // 掉线判定。两条判据缺一不可，理由见各自的定义处（device_lost / CHUNK_TIMEOUT）。
+        if capture.device_lost.load(Ordering::Relaxed) {
+            failure = Some(anyhow::anyhow!(
+                "麦克风「{}」在采集过程中断开",
+                capture.device_name
+            ));
+            break;
+        }
+        if last_chunk.elapsed() >= CHUNK_TIMEOUT {
+            failure = Some(anyhow::anyhow!(
+                "麦克风「{}」超过 {} 秒没有送来任何音频，按断开处理",
+                capture.device_name,
+                CHUNK_TIMEOUT.as_secs()
+            ));
+            break;
+        }
+
         match rx.recv_timeout(POLL_INTERVAL) {
             Ok(chunk) => {
+                last_chunk = Instant::now();
                 let samples = match &resampler {
                     Some(r) => r.resample(&chunk, false),
                     None => chunk,
@@ -177,7 +302,27 @@ fn run(
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                log::warn!("音频采集通道已断开");
+                // **通道断开不等于「正常停止」**，这是踩过的坑（2026-10-15 实测）：
+                // 用户拔掉麦克风时，设备层先报 DeviceNotAvailable 置上 `device_lost`，
+                // 紧接着 cpal 把数据回调连同它持有的 `tx` 一起析构 —— 于是
+                // `recv_timeout` 立刻返回 `Disconnected`，**赶在循环下一次回头检查
+                // `device_lost` 之前**把控制流抢走了。
+                //
+                // 这里原来直接 break（`failure` 保持 `None`），于是一次掉线被当成
+                // 「用户让我们停」上报，装配层收不到 `Failed`：不记错误、不弹选择框，
+                // 状态永远停在「正在聆听」，界面上只剩一个不再跳的电平条。
+                //
+                // 判据是 `stop`：正常停止一定会先置它，那时循环顶上就 break 了，
+                // 根本走不到这里。所以走到这里要么是设备没了，要么是采集侧自己散了 ——
+                // 两种都不该被当成正常。
+                if stop.load(Ordering::Relaxed) {
+                    log::info!("音频采集通道已关闭（正在停止）");
+                    break;
+                }
+                failure = Some(anyhow::anyhow!(
+                    "麦克风「{}」的采集通道意外断开（设备可能已经不可用）",
+                    capture.device_name
+                ));
                 break;
             }
         }
@@ -204,7 +349,11 @@ fn run(
         log::warn!("本次运行共丢弃 {dropped} 个音频块（处理跟不上采集）");
     }
     log::info!("麦克风已释放");
-    Ok(())
+
+    match failure {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 /// 一次采集会话的缓冲与节流状态。

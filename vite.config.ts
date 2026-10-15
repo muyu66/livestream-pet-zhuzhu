@@ -24,9 +24,9 @@ export default defineConfig({
     target: 'chrome110',
     sourcemap: false,
     rollupOptions: {
-      // 两个入口：角色窗口（透明桌宠）与调试窗口（独立工具窗）。
-      // Tauri 用 WebviewUrl::App("debug.html") 打开后者，缺了这个入口
-      // 开发时能跑（Vite 直接服务该文件），打包后调试窗口会是白屏。
+      // 三个入口：角色窗口（透明桌宠）、调试窗口与麦克风选择框（两个独立工具窗）。
+      // Tauri 用 WebviewUrl::App("debug.html") / ("mic-picker.html") 打开后两者，
+      // 缺了哪个入口都是开发时能跑（Vite 直接服务该文件）、打包后那个窗口白屏。
       //
       // 用相对路径而不是 path.resolve(__dirname, ...)：这份配置要把
       // `npm run typecheck` 也过一遍（tsconfig 的 include 里有它），而 tsconfig
@@ -35,6 +35,7 @@ export default defineConfig({
       input: {
         main: 'index.html',
         debug: 'debug.html',
+        'mic-picker': 'mic-picker.html',
       },
     },
   },

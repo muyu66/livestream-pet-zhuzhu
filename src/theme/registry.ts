@@ -80,6 +80,24 @@ function validateTheme(dir: string, definition: ThemeDefinition): void {
   const motions = Object.keys(definition.motions ?? {}).filter((k) => !isDocKey(k))
   const known = new Set(motions)
 
+  // 朝向开关（主题级默认值 + 每个表情的覆盖）必须是真正的布尔值：
+  // 写成字符串 `"false"` 在 JS 里是 truthy，角色会**悄悄反着站**，而配置看起来「写的是 false」。
+  // 这种错靠人眼发现不了，所以在启动时就抛出来。
+  const mirrorFields: Array<[string, unknown]> = [['mirror', definition.mirror]]
+  for (const [name, expression] of Object.entries(definition.expressions ?? {})) {
+    if (isDocKey(name)) continue
+    mirrorFields.push([`表情 "${name}" 的 mirror`, expression?.mirror])
+  }
+  for (const [field, value] of mirrorFields) {
+    if (value === undefined) continue
+    if (typeof value !== 'boolean') {
+      throw new Error(
+        `${where} 的 ${field} 必须是 true / false，收到 ${JSON.stringify(value)}` +
+          '（字符串 "false" 也会被当成 true，角色朝向会反掉）',
+      )
+    }
+  }
+
   for (const [name, expression] of Object.entries(definition.expressions ?? {})) {
     if (isDocKey(name)) continue
     const list = expression?.motions ?? []

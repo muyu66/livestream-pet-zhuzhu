@@ -13,8 +13,14 @@
 //! 用法：
 //!   cargo run --example audio_probe
 //!   cargo run --example audio_probe -- --list-devices
+//!   cargo run --example audio_probe -- --device "wasapi:{0.0.1...}.{guid}"
 //!   cargo run --example audio_probe -- --models-dir D:/models
 //!   cargo run --example audio_probe -- --seconds 90 --level-meter
+//!
+//! `--device <id>` 用 `--list-devices` 打出来的那串 id 指定麦克风（省略则用系统默认，
+//! 这是**只有这个原型会做的事**：正式应用永远按用户选定的设备打开）。
+//! 它也是验证「存档里的 id 能不能把那台设备找回来」的最短路径 ——
+//! 与正式应用走的是同一个 `build_input_stream`。
 //!
 //! `--level-meter` 会另开一路采集专门打印输入电平。它回答的是排查时最先要问的
 //! 那个问题：**麦克风到底有没有在出信号**。当「说了话却识别不到」时，
@@ -23,7 +29,7 @@
 //! 建议用 `RUST_LOG=debug` 打开中间解码日志，可以同时观察识别延迟与稳定性。
 
 use livestream_pet_zhuzhu::audio::capture;
-use livestream_pet_zhuzhu::audio::AudioWorker;
+use livestream_pet_zhuzhu::audio::{AudioWorker, WorkerStatus};
 use livestream_pet_zhuzhu::config::AudioConfig;
 use livestream_pet_zhuzhu::events::{PetDebug, PetEvent};
 use livestream_pet_zhuzhu::paths;
@@ -52,6 +58,7 @@ fn main() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_DURATION_SECS);
     let with_level_meter = args.iter().any(|a| a == "--level-meter");
+    let device_id = arg_value(&args, "--device");
 
     let config = AudioConfig::load();
 
@@ -59,6 +66,10 @@ fn main() {
     println!(" 直播宠物 · 阶段 0 音频验证原型");
     println!("==========================================================");
     println!("模型目录   : {}", models_dir.display());
+    println!(
+        "麦克风     : {}",
+        device_id.as_deref().unwrap_or("（系统默认）")
+    );
     println!("采样率     : {} Hz", config.sample_rate);
     println!("静音超时   : {} ms", config.stability.idle_timeout_ms);
     println!(
@@ -130,7 +141,14 @@ fn main() {
         ),
     });
 
-    let mut worker = AudioWorker::spawn(emit, debug, config, models_dir);
+    // 状态出口：这里也是打日志。正式应用里它决定「麦克风到底开起来没有」，
+    // 以及要不要把选择框弹出来。
+    let status = Arc::new(|status: WorkerStatus| match status {
+        WorkerStatus::Ready { device_name } => println!("[状态] 正在聆听: {device_name}"),
+        WorkerStatus::Failed(reason) => eprintln!("[状态] 没听成: {reason}"),
+    });
+
+    let mut worker = AudioWorker::spawn(emit, debug, status, config, models_dir, device_id);
     println!("（模型加载中，请稍候…）");
 
     let level_meter = if with_level_meter {
@@ -191,7 +209,9 @@ fn spawn_level_meter(stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
         .name("probe-level".into())
         .spawn(move || {
             let (tx, rx) = crossbeam_channel::bounded::<capture::AudioChunk>(8);
-            let stream = match capture::build_input_stream(tx) {
+            // 电平表是另一路诊断，不跟着 --device 走：它要回答的是「系统默认那只麦
+            // 到底有没有在出信号」，与正式采集用哪只无关。
+            let stream = match capture::build_input_stream(tx, None) {
                 Ok(stream) => stream,
                 Err(err) => {
                     eprintln!("[电平表] 打开采集失败: {err:#}");
@@ -255,10 +275,16 @@ fn list_devices() {
             println!("  （没有找到任何输入设备）");
         }
         Ok(devices) => {
-            for (name, is_default) in devices {
-                println!("  {}{}", if is_default { "* " } else { "  " }, name);
+            for device in devices {
+                println!(
+                    "  {}{}\n      id: {}",
+                    if device.is_default { "* " } else { "  " },
+                    device.name,
+                    device.id
+                );
             }
             println!("\n(* 表示默认设备)");
+            println!("把某台的 id 抄给 --device 就能只测它（正式应用按同一个 id 记住用户的选择）。");
         }
         Err(err) => {
             eprintln!("枚举输入设备失败: {err:#}");

@@ -61,6 +61,7 @@ export interface MenuEntry {
 }
 
 /** 与 Rust `menu.rs` 中的常量对应 */
+export const MENU_CHOOSE_MIC = 'choose-mic'
 export const MENU_TOGGLE_TOPMOST = 'toggle-topmost'
 export const MENU_QUIT = 'quit'
 

@@ -40,6 +40,8 @@ const CSS_VARS: Array<[keyof MotionParams, string]> = [
   ['sink', '--pet-sink'],
   ['pop', '--pet-pop'],
   ['squash', '--pet-squash'],
+  ['spin', '--pet-spin'],
+  ['persp', '--pet-persp'],
 ]
 
 /**
@@ -50,8 +52,16 @@ const CSS_VARS: Array<[keyof MotionParams, string]> = [
  * 调度器的兜底定时器用的是同一个 durationMs，两边不会漂。
  */
 const cssVars = computed<Record<string, string>>(() => {
-  const config = props.theme.definition.motions[props.motion]
   const vars: Record<string, string> = {}
+
+  // 朝向：表情没写就用主题的默认值。挂在 `.pet-image` 上（见 animations.css），
+  // 所以它和动作无关 —— 换表情会换朝向，但动作本身不会把它掰回来。
+  const mirrored = props.theme.definition.expressions[props.expression]?.mirror
+    ?? props.theme.definition.mirror
+    ?? false
+  vars['--pet-mirror'] = mirrored ? '-1' : '1'
+
+  const config = props.theme.definition.motions[props.motion]
   if (!config) {
     // 配置里没有这个动作名（validateTheme 会先报错，这里只是不让它炸在模板上）
     console.error(`[pet] 动作 "${props.motion}" 不在 theme.json 的 motions 里，这一拍不会有动画`)

@@ -1,7 +1,10 @@
 //! 前端可调用的命令。
 
-use crate::app::AppState;
+use crate::app::{self, AppState};
+use crate::audio::capture::{self, DeviceInfo};
+use crate::events::AudioChoice;
 use crate::menu::{self, MenuEntry};
+use crate::window_state::DeviceChoice;
 use std::sync::atomic::Ordering;
 use tauri::{
     AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
@@ -9,6 +12,17 @@ use tauri::{
 
 /// 调试窗口的 label。前端、能力文件（capabilities/debug.json）都按它对齐。
 pub const DEBUG_WINDOW: &str = "debug";
+
+/// 麦克风选择框的 label。前端、能力文件（capabilities/mic-picker.json）都按它对齐。
+pub const PICKER_WINDOW: &str = "mic-picker";
+
+const PICKER_WINDOW_TITLE: &str = "选择麦克风";
+
+/// 选择框的尺寸。比调试窗口小得多：里面就是几行设备加一条电平。
+///
+/// 高度留得比内容多：设备列表最长时（插了一堆虚拟声卡）会滚动，
+/// 而滚动条在 420 的高度里只露两三行，很难看出下面还有东西。
+const PICKER_WINDOW_SIZE: (f64, f64) = (360.0, 460.0);
 
 const DEBUG_WINDOW_TITLE: &str = "直播宠物 · 调试";
 
@@ -109,6 +123,102 @@ pub async fn toggle_debug_window(app: AppHandle) -> bool {
             false
         }
     }
+}
+
+/// 列出可选的输入设备（选择框的列表用）。
+///
+/// `async` 不是为了建窗，而是为了**别在主线程上枚举音频设备** ——
+/// 枚举要走 COM/WASAPI，几十毫秒起步，卡的是整个界面的消息循环。
+#[tauri::command]
+pub async fn list_input_devices() -> Result<Vec<DeviceInfo>, String> {
+    capture::list_input_devices().map_err(|err| format!("{err:#}"))
+}
+
+/// 当前用的是哪只麦克风、现在什么状态。选择框打开时先要一份。
+#[tauri::command]
+pub fn audio_state(app: AppHandle) -> AudioChoice {
+    app::current_audio(&app)
+}
+
+/// 选定某只麦克风（`None` = 不监听）。点一行就调它，返回调用之后的状态。
+///
+/// `async`：里面要停掉旧采集线程，最长等 3 秒，不能占着主线程。
+#[tauri::command]
+pub async fn choose_audio_device(app: AppHandle, device: Option<DeviceChoice>) -> AudioChoice {
+    match &device {
+        Some(device) => log::info!("选择麦克风: {}（{}）", device.name, device.id),
+        None => log::info!("选择麦克风: 不监听"),
+    }
+    app::choose_audio(&app, device);
+    app::current_audio(&app)
+}
+
+/// 开关实时电平推送。选择框挂载时开、卸载时关。
+///
+/// 与 `set_debug` 是同一个形状，但**刻意是另一个开关**：
+/// 两个窗口各推各的数据，谁也关不掉对方的（见 `AppState::meter` 的注释）。
+#[tauri::command]
+pub fn set_meter(app: AppHandle, enabled: bool) -> bool {
+    app.state::<AppState>()
+        .meter
+        .store(enabled, Ordering::Relaxed);
+    log::debug!("实时电平推送已{}", if enabled { "开启" } else { "关闭" });
+    enabled
+}
+
+/// 打开选择框。幂等：已经开着就把它拿到前面来。
+///
+/// **`async fn` 的原因与 `toggle_debug_window` 完全一样**（见那里的长注释）：
+/// 建窗必须离开主线程，否则会自锁成白屏。
+#[tauri::command]
+pub async fn open_mic_picker(app: AppHandle) {
+    app::spawn_mic_picker(&app);
+}
+
+/// 关闭选择框。**关窗的语义在 Rust 这边**（见 `app::settle_picker_closed`）：
+/// 手上没有可用麦克风时，把它关掉就等于选了「不监听」。
+///
+/// 所以前端必须走这条命令，不能自己 `getCurrentWindow().close()` —— 那样会绕开记录。
+#[tauri::command]
+pub async fn close_mic_picker(app: AppHandle) {
+    let Some(window) = app.get_webview_window(PICKER_WINDOW) else {
+        return;
+    };
+    if let Err(err) = window.close() {
+        log::warn!("关闭麦克风选择框失败: {err}");
+    }
+}
+
+/// 建出选择框窗口。**只给 `app::spawn_mic_picker` 用**，不要从命令里直接调。
+pub fn open_mic_picker_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    let window = WebviewWindowBuilder::new(
+        app,
+        PICKER_WINDOW,
+        WebviewUrl::App("mic-picker.html".into()),
+    )
+    .title(PICKER_WINDOW_TITLE)
+    .inner_size(PICKER_WINDOW_SIZE.0, PICKER_WINDOW_SIZE.1)
+    // 不可缩放：内容是一列定长的行，能拉大只会拉出一片空白。
+    // 与调试窗口（那个要放日志，必须能拉）刚好相反。
+    .resizable(false)
+    // 置顶：这个框会弹在全屏的游戏/OBS 上面，不置顶就等于没弹 ——
+    // 用户只会发现「角色不反应了」，却看不到让他选麦克风的那个框。
+    .always_on_top(true)
+    .center()
+    .build()?;
+
+    // 窗口关掉了就把电平推送关掉，理由与调试窗口那条一样：
+    // 前端只有在挂载/卸载时才调 set_meter，而 Alt+F4、应用退出这些路径它未必赶得上。
+    // 顺带处理「关掉没选」的语义（见 `settle_picker_closed`）。
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            handle.state::<AppState>().meter.store(false, Ordering::Relaxed);
+            app::settle_picker_closed(&handle);
+        }
+    });
+
+    Ok(window)
 }
 
 fn open_debug_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {

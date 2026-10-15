@@ -29,8 +29,16 @@
  *         Promise.race([window.__TAURI_INTERNALS__.invoke('toggle_debug_window')
  *           .then(v => 'RET:' + v), new Promise(r => setTimeout(() => r('TIMEOUT'), 5000))])
  *
+ *   node tools/cdp_probe.mjs shot <URL关键字> <输出.png>
+ *       把页面当前画面存成 PNG。想看动画的某一帧时，先用 eval 把动画冻住：
+ *         eval localhost:1420 "(() => { const el = document.querySelector('.pet-motion');
+ *           const a = el.getAnimations()[0]; a.pause(); a.currentTime = 500; return a.animationName })()"
+ *       然后 shot 出去看。没有屏幕时，「这一帧是不是真的翻过去了」就变成一张能看的图。
+ *
  * 依赖：Node ≥ 22（用内置的全局 WebSocket，不需要任何 npm 包）。
  */
+
+import { writeFileSync } from 'node:fs'
 
 const PORT = process.env.CDP_PORT ?? '9222'
 const ENDPOINT = `http://127.0.0.1:${PORT}/json`
@@ -40,6 +48,7 @@ const USAGE = `用法:
   node tools/cdp_probe.mjs list
   node tools/cdp_probe.mjs dump <URL关键字>
   node tools/cdp_probe.mjs eval <URL关键字> <JS表达式>
+  node tools/cdp_probe.mjs shot <URL关键字> <输出.png>
 
 应用要用远程调试端口启动:
   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=${PORT}" npm run tauri dev`
@@ -87,13 +96,35 @@ function pickTarget(targets, filter) {
 
 /** 在指定页面里求值。返回值的类型不限，由调用方决定怎么打印。 */
 function evaluate(wsUrl, expression) {
+  return send(wsUrl, 'Runtime.evaluate', {
+    // awaitPromise：表达式返回 Promise 时等它 settle，而不是回一个 Promise 对象
+    // returnByValue：把结果序列化回来，否则只能拿到一个 objectId
+    expression,
+    awaitPromise: true,
+    returnByValue: true,
+  }).then((msg) => {
+    const details = msg.result?.exceptionDetails
+    if (details) {
+      const text = details.exception?.description ?? details.text ?? JSON.stringify(details)
+      throw new Error(`页面里抛出异常:\n${text}`)
+    }
+    return msg.result?.result?.value
+  })
+}
+
+/** 往页面发一条 CDP 命令，把 result 原样返回（求值用 Runtime.evaluate，截图用 Page.*）。 */
+function send(wsUrl, method, params) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl)
     const id = 1
     const timer = setTimeout(() => {
       ws.close()
-      reject(new Error(`CDP 求值超时（${EVAL_TIMEOUT_MS}ms）。表达式里如果调了后端命令，` +
-        '用 Promise.race 自己加超时，才能看出「命令卡住」而不是「工具卡住」。'))
+      reject(
+        new Error(
+          `CDP 超时（${EVAL_TIMEOUT_MS}ms）。表达式里如果调了后端命令，` +
+            '用 Promise.race 自己加超时，才能看出「命令卡住」而不是「工具卡住」。',
+        ),
+      )
     }, EVAL_TIMEOUT_MS)
 
     const finish = (fn, arg) => {
@@ -107,29 +138,14 @@ function evaluate(wsUrl, expression) {
     }
 
     ws.addEventListener('open', () => {
-      ws.send(
-        JSON.stringify({
-          id,
-          method: 'Runtime.evaluate',
-          // awaitPromise：表达式返回 Promise 时等它 settle，而不是回一个 Promise 对象
-          // returnByValue：把结果序列化回来，否则只能拿到一个 objectId
-          params: { expression, awaitPromise: true, returnByValue: true },
-        }),
-      )
+      ws.send(JSON.stringify({ id, method, params }))
     })
 
     ws.addEventListener('message', (event) => {
       const msg = JSON.parse(event.data)
       if (msg.id !== id) return
-
       if (msg.error) return finish(reject, new Error(JSON.stringify(msg.error)))
-
-      const details = msg.result?.exceptionDetails
-      if (details) {
-        const text = details.exception?.description ?? details.text ?? JSON.stringify(details)
-        return finish(reject, new Error(`页面里抛出异常:\n${text}`))
-      }
-      finish(resolve, msg.result?.result?.value)
+      finish(resolve, msg)
     })
 
     ws.addEventListener('error', () => {
@@ -143,6 +159,20 @@ function evaluate(wsUrl, expression) {
       )
     })
   })
+}
+
+/**
+ * 截图：把页面当前画面写成 PNG。
+ *
+ * 为什么需要它：动画「看起来对不对」以前只能靠人眼，而这里没有屏幕。
+ * 配合 `getAnimations()[0].pause()` + `currentTime = X` 可以把动画**冻在某一帧**上，
+ * 于是「翻转动作在第 500ms 是不是真的侧身了」变成一张能看的图，而不是一个推理。
+ */
+async function screenshot(wsUrl) {
+  const msg = await send(wsUrl, 'Page.captureScreenshot', { format: 'png' })
+  const data = msg.result?.data
+  if (!data) throw new Error(`截图失败: ${JSON.stringify(msg)}`)
+  return Buffer.from(data, 'base64')
 }
 
 /** 一条命令问完「这个窗口现在长什么样」——最常用的检查，所以做成子命令 */
@@ -190,6 +220,19 @@ async function main() {
     const target = pickTarget(targets, filter)
     const value = await evaluate(target.webSocketDebuggerUrl, expression)
     console.log(typeof value === 'string' ? value : JSON.stringify(value, null, 2))
+    return 0
+  }
+
+  if (cmd === 'shot') {
+    const [filter, out] = args
+    if (!filter || !out) {
+      throw new Error('shot 需要 URL 关键字和输出文件，例如:\n' +
+        '  shot localhost:1420 C:\\Temp\\pet.png')
+    }
+    const target = pickTarget(targets, filter)
+    const png = await screenshot(target.webSocketDebuggerUrl)
+    writeFileSync(out, png)
+    console.log(`${out}\t${png.length} 字节`)
     return 0
   }
 

@@ -6,6 +6,7 @@
 //! 刻意没有 `confidence` 字段：SenseVoice 不返回可用置信度，DEV.md §5.6 明确禁止
 //! 凭空生成。稳定性由「连续窗口一致性 + 最短持续时间 + 冷却」保证，见 `audio::emotion::Stabilizer`。
 
+use crate::window_state::DeviceChoice;
 use serde::Serialize;
 
 /// 推送给前端的事件通道名。前端 `src/types/events.ts` 中的常量必须与此一致。
@@ -27,6 +28,66 @@ pub const PET_ALWAYS_ON_TOP_CHANNEL: &str = "pet://always-on-top";
 /// 排查「为什么没识别出来」时缺的正是这些，所以单开一条通道，
 /// 只在调试面板打开时推送，免得正常运行也白白走 IPC。
 pub const PET_DEBUG_CHANNEL: &str = "pet://debug";
+
+/// 「用的是哪只麦克风、现在到底在不在听」的通道名。
+///
+/// 与 `pet://debug` 分开是有意的：那条通道是排查用的可选数据流（调试面板开着才有），
+/// 而这一条是**状态** —— 选择框靠它决定显示「正在聆听」还是「连接失败」，
+/// 角色窗口靠它决定要不要提示。它不该因为调试面板没开就收不到。
+pub const PET_AUDIO_CHANNEL: &str = "pet://audio";
+
+/// 选择框要看的实时电平。
+///
+/// **为什么另开一条通道，而不是复用 `pet://debug`**：两条流各自的闸门不同
+/// （调试面板 vs 选择框），复用一条会让「关掉其中一个窗口」这件事互相干扰
+/// —— `App.vue` 里那条关于热重载的注释记的正是这个坑。负载类型倒是可以共用
+/// [`DebugLevel`]，它描述的本来就是采集流的状态，与谁在看无关。
+pub const PET_LEVEL_CHANNEL: &str = "pet://level";
+
+/// 音频选择的当前状态。选择框与调试面板都读它。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AudioStatus {
+    /// 不监听：语气分析**整套不启用**（不是把阈值调大，是根本不建工作线程）。
+    Off,
+    /// 正在连接那只麦克风：加载模型 + 打开流。要一两秒。
+    Connecting,
+    /// 正在聆听。
+    Listening,
+    /// 手上没有能用的麦克风，等用户在选择框里挑一只（或挑「不监听」）。
+    NeedChoice,
+    /// 试过了，没成。`reason` 是给用户看的说明。
+    Failed { reason: String },
+}
+
+/// 「用哪只麦克风 + 现在什么状态」，一起送出去。
+///
+/// 做成一个整体是因为两者必须同时到达：单说「状态是 Listening」而不知道是哪只，
+/// 选择框就没法把高亮标在正确的行上。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AudioChoice {
+    /// 用户选定的设备；`None` = 不监听。
+    pub device: Option<DeviceChoice>,
+    pub status: AudioStatus,
+}
+
+impl AudioChoice {
+    /// 从没配过（配置文件里没有 `audio` 这一节）。
+    pub fn need_choice() -> Self {
+        Self {
+            device: None,
+            status: AudioStatus::NeedChoice,
+        }
+    }
+
+    /// 用户明确选了「不监听」。
+    pub fn off() -> Self {
+        Self {
+            device: None,
+            status: AudioStatus::Off,
+        }
+    }
+}
 
 /// 一次识别结果（原文 + 模型给出的原始 token）。
 ///
