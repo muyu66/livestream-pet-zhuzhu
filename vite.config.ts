@@ -23,5 +23,19 @@ export default defineConfig({
     // 使用系统 WebView2，无需为旧浏览器降级。
     target: 'chrome110',
     sourcemap: false,
+    rollupOptions: {
+      // 两个入口：角色窗口（透明桌宠）与调试窗口（独立工具窗）。
+      // Tauri 用 WebviewUrl::App("debug.html") 打开后者，缺了这个入口
+      // 开发时能跑（Vite 直接服务该文件），打包后调试窗口会是白屏。
+      //
+      // 用相对路径而不是 path.resolve(__dirname, ...)：这份配置要把
+      // `npm run typecheck` 也过一遍（tsconfig 的 include 里有它），而 tsconfig
+      // 没有 @types/node，`__dirname` / `node:url` 都会直接报错。
+      // 入口相对的是运行目录，也就是 `npm run build` / `tauri build` 的工程根目录。
+      input: {
+        main: 'index.html',
+        debug: 'debug.html',
+      },
+    },
   },
 })

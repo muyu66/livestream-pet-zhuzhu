@@ -120,25 +120,32 @@ impl WorkArea {
     }
 }
 
-/// 把窗口左上角夹进某块工作区，保证**整个窗口**都留在屏幕内。
+/// 决定这个存档位置还原到哪儿：**能不动就不动，只有真的跟所有显示器都对不上了才夹回来**。
 ///
-/// 返回 `None` 表示没有任何显示器放得下它（显示器被拔掉、分辨率变小等），
-/// 调用方应退回配置里的居中显示。
+/// 1. 窗口与某块工作区有交集 → 照搬存档。
+/// 2. 跟所有工作区都没有交集 → 存档来自一块已经被拔掉的显示器（或分辨率变小了），
+///    这时才夹进最近一块装得下的工作区。
 ///
-/// 为什么是「夹住」而不是「丢弃」：早先是只要左上角落在工作区内就照搬存档，
-/// 结果窗口可以大半挂在屏幕外。桌宠被拖到贴边再退出，下次回来就只剩一角 ——
-/// 用户找不着，也不知道该往哪儿找。夹一下最多把贴边的宠物挪回几像素，
-/// 比让它半消失划算得多。
-fn clamp_into(areas: &[WorkArea], w: i32, h: i32, x: i32, y: i32) -> Option<(i32, i32)> {
-    // 优先选已经能完整容纳窗口的那块，避免多显示器下把窗口挪到隔壁屏幕
-    if areas
-        .iter()
-        .any(|a| x >= a.x && y >= a.y && x + w <= a.right() && y + h <= a.bottom())
-    {
+/// 返回 `None` 表示没有任何一块工作区装得下窗口，调用方退回居中显示。
+///
+/// **为什么允许窗口挂到屏幕外**（这条规则是被实际使用推翻后改的，别再改回去）：
+/// 用户会把角色摆到屏幕边角、甚至大半压在任务栏上 —— 那是他自己放的位置，不该被程序搬走。
+/// 原来要求「整个窗口都得在工作区内」，实际用下来有两个后果：角色永远离屏幕边缘差一圈余量；
+/// 更糟的是夹过的位置退出时会被当成新位置存回去，**每启动一次就被往里推一次**，
+/// 用户再怎么拖都留不住。窗口与角色框合并成等大之后（DEV.md §3.1）这条仍要留着：
+/// 「窗口正好贴着工作区边界」必须是合法的，否则夹一下就会把角色从角上推开。
+///
+/// 放宽之后也不会把角色弄丢：拖拽过程中抓取点始终在屏幕内（光标的坐标被系统限制在
+/// 桌面上），所以一次拖拽结束时窗口必然还压着屏幕，第 一 条分支总能命中。
+fn resolve_placement(areas: &[WorkArea], w: i32, h: i32, x: i32, y: i32) -> Option<(i32, i32)> {
+    let overlaps =
+        |a: &WorkArea| x < a.right() && y < a.bottom() && x + w > a.x && y + h > a.y;
+
+    if areas.iter().any(overlaps) {
         return Some((x, y));
     }
 
-    // 否则挑一块装得下窗口的，夹进去（取离原坐标最近的一种夹法）
+    // 挑一块装得下窗口的，夹进去（取离原坐标最近的一种夹法）
     areas
         .iter()
         .filter(|a| a.width >= w && a.height >= h)
@@ -146,9 +153,9 @@ fn clamp_into(areas: &[WorkArea], w: i32, h: i32, x: i32, y: i32) -> Option<(i32
         .min_by_key(|(cx, cy)| (i64::from(cx - x)).pow(2) + (i64::from(cy - y)).pow(2))
 }
 
-/// 算出一个可用的还原位置：夹进当前存在的某个显示器工作区。
+/// 算出一个可用的还原位置。
 ///
-/// 用的是工作区而不是整块屏幕，所以不会把窗口还原到任务栏底下。
+/// 坐标来自工作区而不是整块屏幕，所以贴底时角色是坐在任务栏上沿的。
 pub fn resolve_restore_position<R: Runtime>(
     app: &AppHandle<R>,
     saved: SavedWindow,
@@ -180,11 +187,11 @@ pub fn resolve_restore_position<R: Runtime>(
         return None;
     }
 
-    match clamp_into(&areas, size.width as i32, size.height as i32, saved.x, saved.y) {
+    match resolve_placement(&areas, size.width as i32, size.height as i32, saved.x, saved.y) {
         Some((x, y)) => {
             if (x, y) != (saved.x, saved.y) {
                 log::info!(
-                    "存档位置 ({}, {}) 会被屏幕边缘裁掉，已夹到 ({x}, {y})",
+                    "存档位置 ({}, {}) 与当前所有显示器都没有交集（显示器被拔掉或分辨率变了？），已夹到 ({x}, {y})",
                     saved.x,
                     saved.y
                 );
@@ -239,39 +246,58 @@ mod tests {
         }]
     }
 
-    const W: i32 = 320;
-    const H: i32 = 320;
+    // 窗口与角色框等大（见 DEV.md §3.1），这两个数都取当前实际的 160
+    const W: i32 = 160;
+    const H: i32 = 160;
 
     #[test]
     fn accepted_position_is_left_alone() {
-        assert_eq!(clamp_into(&areas(), W, H, 800, 400), Some((800, 400)));
+        assert_eq!(resolve_placement(&areas(), W, H, 800, 400), Some((800, 400)));
     }
 
-    /// 这条是实际踩到的：窗口右边缘超出屏幕 17px，
-    /// 用户下次回来只看到被切掉一角的宠物。
+    /// 贴边挂出去是**故意的**，必须原样保留。
+    ///
+    /// 这几条原来断言的是「往里夹」—— 实际用下来，那个行为让角色永远离边缘差一圈余量，
+    /// 而且夹过的位置退出时又被存回去，每启动一次往里推一次。
     #[test]
-    fn position_hanging_off_the_right_edge_is_pulled_back() {
-        assert_eq!(clamp_into(&areas(), W, H, 1617, 708), Some((1600, 708)));
-    }
-
-    #[test]
-    fn position_overlapping_the_taskbar_is_lifted() {
-        assert_eq!(clamp_into(&areas(), W, H, 100, 1000), Some((100, 712)));
+    fn position_hanging_off_the_edge_is_kept() {
+        // 窗口正好卡在工作区右下角：角色与窗口等大，所以角色也正好贴住角
+        assert_eq!(resolve_placement(&areas(), W, H, 1760, 872), Some((1760, 872)));
+        // 大半压在任务栏上：也是用户自己拖过去的，不搬
+        assert_eq!(resolve_placement(&areas(), W, H, 100, 1000), Some((100, 1000)));
+        // 只剩 1px 搭在工作区上：拖拽结束时抓取点必然还在屏幕内，就是这种边界
+        assert_eq!(resolve_placement(&areas(), W, H, 1919, 400), Some((1919, 400)));
     }
 
     #[test]
     fn position_on_a_removed_monitor_is_brought_back() {
-        // 老坐标落在已拔掉的第二块屏上；现存这块装得下，就夹回来
-        assert_eq!(clamp_into(&areas(), W, H, 3000, 200), Some((1600, 200)));
+        // 老坐标落在已拔掉的第二块屏上；现存这块装得下，就夹回来右边缘贴齐
+        assert_eq!(resolve_placement(&areas(), W, H, 3000, 200), Some((1760, 200)));
+    }
+
+    /// 与所有工作区都没有交集（连一个像素都没搭上）才值得救：
+    /// 到了这一步只可能是显示器没了或分辨率变了，不是用户拖出来的。
+    #[test]
+    fn position_completely_off_screen_is_brought_back() {
+        // 左边完全在屏幕外：x + w == 0（正好擦着左边界，一个像素都没搭上）
+        assert_eq!(resolve_placement(&areas(), W, H, -160, 200), Some((0, 200)));
+        assert_eq!(resolve_placement(&areas(), W, H, 1920, 200), Some((1760, 200)));
+    }
+
+    /// 窗口比屏幕还大：只要还压在工作区上就照搬 —— 这时交给调用方居中只会更糟。
+    #[test]
+    fn window_larger_than_any_monitor_still_overlapping_is_kept() {
+        assert_eq!(resolve_placement(&areas(), 2000, 1200, 0, 0), Some((0, 0)));
+    }
+
+    /// 装不下、又完全在屏幕外 → 放弃还原，让调用方居中
+    #[test]
+    fn window_that_no_monitor_can_hold_is_rejected() {
+        assert_eq!(resolve_placement(&areas(), 2000, 1200, 5000, 0), None);
     }
 
     #[test]
-    fn window_larger_than_any_monitor_is_rejected() {
-        assert_eq!(clamp_into(&areas(), 2000, 1200, 0, 0), None);
-    }
-
-    #[test]
-    fn multi_monitor_prefers_the_screen_already_containing_the_window() {
+    fn position_on_the_second_monitor_is_kept() {
         let two = vec![
             WorkArea {
                 x: 0,
@@ -288,14 +314,17 @@ mod tests {
             },
         ];
         // 窗口本来就在左屏内，不该被挪到主屏
-        assert_eq!(clamp_into(&two, W, H, -900, 100), Some((-900, 100)));
+        assert_eq!(resolve_placement(&two, W, H, -900, 100), Some((-900, 100)));
     }
 
     /// 夹取必须考虑窗口尺寸，不能只夹左上角那个点：
     /// 宽度快占满整块屏时，x 的可选范围本来就很窄。
     #[test]
     fn clamping_accounts_for_window_size() {
-        assert_eq!(clamp_into(&areas(), 1900, H, 100, 100), Some((20, 100)));
+        assert_eq!(
+            resolve_placement(&areas(), 1900, H, 5000, 100),
+            Some((20, 100))
+        );
     }
 
     /// 置顶字段是后加的：早期版本写出的存档只有坐标。

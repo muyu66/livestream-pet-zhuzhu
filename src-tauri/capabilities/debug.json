@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "debug",
+  "description": "调试窗口的权限。和主窗口分开列：权限是按窗口 label 授予的，调试窗口只需要收发事件与调用命令，不该顺带拿到主窗口的窗口操作权限。",
+  "windows": ["debug"],
+  "permissions": [
+    "core:default"
+  ]
+}

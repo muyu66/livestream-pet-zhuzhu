@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
     "tauri": "tauri",
-    "fetch-models": "bash tools/fetch-models.sh"
+    "fetch-models": "bash tools/fetch-models.sh",
+    "expressions": "python -I tools/expressions.py themes/zhuzhu/expressions/face.jpg themes/zhuzhu/expressions --ref themes/zhuzhu/base.png --debug",
+    "fit": "python -I tools/fit_check.py",
+    "cdp": "node tools/cdp_probe.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

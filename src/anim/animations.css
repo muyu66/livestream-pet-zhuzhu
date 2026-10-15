@@ -1,15 +1,25 @@
 /* ============================================================================
- * 单 PNG 程序动画（DEV.md §4）
+ * 动作库 —— 单 PNG 程序动画（DEV.md §4.3）
  *
  * 只有一张透明 PNG，所以所有动作都是「整张图的运动模拟」，
  * 不宣称能实现真实的眼球转动或头部独立运动。
  *
  * 结构：
- *   .pet-motion  外层 —— 承载动作动画（位移 / 旋转 / 放大）
- *   .pet-breathe 内层 —— 常驻的呼吸缩放，与动作动画叠加
+ *   .pet-motion  外层 —— 承载当前这一个动作的动画（位移 / 旋转 / 缩放）
+ *   .pet-breathe 内层 —— 常驻的呼吸缩放，与动作动画叠加，**不跟着动作换类**
  *
- * 所有数值都通过 CSS 自定义属性注入（由 theme.json 提供），
- * 这里只写运动结构，不写死具体幅度。
+ * 三个层次各自职责分明：
+ *   - 这里的每个动作**只播一遍**（`1 both`，没有 infinite）——要不要循环由表情决定
+ *     （theme.json 里表情的 `loop`），这样就不会出现「CSS 写 infinite、配置又写 loop」
+ *     两处互相打架的真相。
+ *   - 时长的唯一来源是 theme.json 里动作的 `durationMs`，由组件推导成 `--pet-duration`
+ *     注入；下面 var() 的默认值只是为了让这个文件单独看也说得通，实际以配置为准。
+ *   - 数值全部走 CSS 自定义属性（`--pet-*`），这里只写运动结构，不写死幅度。
+ *
+ * **动作名 = 关键帧后缀 = theme.json 里 `motions` 的键**，三者必须一致：
+ * `tools/fit_check.py` 会逐个核对，并在改动幅度后重新算越界像素。
+ *
+ * 加一个动作见 theme.json 顶部 `_motions_说明` 的三步。
  * ========================================================================== */
 
 .pet-motion {
@@ -23,7 +33,9 @@
   transform-origin: 50% 88%;
   width: 100%;
   height: 100%;
-  animation: pet-breathe 4.2s ease-in-out infinite;
+  /* 常驻呼吸，与动作无关，所以关键帧名字带 -ambient 后缀 ——
+     动作库里的 breathe 才占 `pet-breathe` 这个名字（动作名 == 关键帧后缀是硬规则）。 */
+  animation: pet-breathe-ambient 4.2s ease-in-out infinite;
   will-change: transform;
 }
 
@@ -39,9 +51,13 @@
   pointer-events: none;
 }
 
-/* ---------------------------------------------------------------- 呼吸循环 */
+/* ---------------------------------------------------------- 常驻呼吸循环
+ * 挂着不动的那种「活着」的感觉，**不属于动作库**：它一直在演，
+ * 不参与序列，所以不会被 scheduler 调度，也不该出现在 theme.json 的 motions 里。
+ * fit_check.py 按 `-ambient` 后缀把它排除在动作之外。
+ */
 
-@keyframes pet-breathe {
+@keyframes pet-breathe-ambient {
   0%,
   100% {
     transform: scale(1);
@@ -51,101 +67,147 @@
   }
 }
 
-/* -------------------------------------------------------------------- idle
- * 「四处张望」的近似：左倾停顿 → 回中 → 右倾停顿 → 回中 → 轻微起伏。
- * 每个动作后面保留一段「平台」（相邻关键帧变换值相同），
- * 使画面短暂的静止一下，避免机械式的匀速连续摆动（DEV.md §4.2）。
- * 总时长约 13s，足够慢，看久了不烦。
+/* ============================================================================
+ * 动作库正文
+ *
+ * 约定（改关键帧的人请先读这几条）：
+ *
+ * 1. **变换的书写顺序必须是 `translate3d() rotate() scaleX() scaleY()`**（或 `scale()`）。
+ *    CSS 从右往左作用到点上，也就是先缩放、再旋转、最后位移；fit_check.py 就是按这个
+ *    复合顺序把变换作用到角色轮廓上算越界像素的，换顺序算出来的数就不对了。
+ * 2. **每一帧的最后一帧（100%）必须回到中性姿态**。动作演完到下一步之间可能差一帧，
+ *    停在半路会让角色以奇怪的姿势闪一下。`hold` 全程中性也是这个道理。
+ * 3. **关键帧之间保留「平台」**（相邻两帧数值相同）画面才会短暂静止，
+ *    否则看起来是机械的匀速摆动（DEV.md §4.2）。
+ * 4. 幅度按「好看」定。越出角色框的部分会被窗口边切掉（DEV.md §3.1），
+ *    这是有意接受的代价；fit_check.py 会列出每个动作被切掉多少像素。
+ * ========================================================================== */
+
+/* -------------------------------------------------------------------- sway
+ * 左摇右摆：摆向一侧 → 停一会儿 → 摆向另一侧 → 停一会儿 → 回中。
+ * 整个待机循环由六个动作拼成（sway / hold / drift / hold / breathe / hold，共 17.6s），
+ * 所以这一段自己不需要很长的停顿，慢就够了。
  */
-@keyframes pet-idle {
+@keyframes pet-sway {
   0% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+    transform: translate3d(0, 0, 0) rotate(0deg);
   }
   /* 缓缓转向左侧 */
-  5% {
-    transform: translate3d(calc(var(--pet-drift, 14px) * -1), calc(var(--pet-bob, 5px) * -0.6), 0)
-      rotate(calc(var(--pet-tilt, 3.5deg) * -1)) scale(1);
+  12% {
+    transform: translate3d(calc(var(--pet-drift, 10px) * -1), calc(var(--pet-bob, 3.5px) * -0.6), 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * -1));
   }
-  /* 停住看一会儿 */
-  14% {
-    transform: translate3d(calc(var(--pet-drift, 14px) * -1), calc(var(--pet-bob, 5px) * -0.6), 0)
-      rotate(calc(var(--pet-tilt, 3.5deg) * -1)) scale(1);
+  30% {
+    transform: translate3d(calc(var(--pet-drift, 10px) * -1), calc(var(--pet-bob, 3.5px) * -0.6), 0)
+      rotate(calc(var(--pet-tilt, 2.5deg) * -1));
   }
-  /* 回到中间 */
-  22% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-  }
-  28% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  42% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
   }
   /* 缓缓转向右侧 */
-  40% {
-    transform: translate3d(var(--pet-drift, 14px), calc(var(--pet-bob, 5px) * -0.5), 0)
-      rotate(var(--pet-tilt, 3.5deg)) scale(1);
+  56% {
+    transform: translate3d(var(--pet-drift, 10px), calc(var(--pet-bob, 3.5px) * -0.5), 0)
+      rotate(var(--pet-tilt, 2.5deg));
   }
-  /* 停住看一会儿 */
-  49% {
-    transform: translate3d(var(--pet-drift, 14px), calc(var(--pet-bob, 5px) * -0.5), 0)
-      rotate(var(--pet-tilt, 3.5deg)) scale(1);
+  74% {
+    transform: translate3d(var(--pet-drift, 10px), calc(var(--pet-bob, 3.5px) * -0.5), 0)
+      rotate(var(--pet-tilt, 2.5deg));
   }
-  /* 回到中间 */
-  57% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-  }
-  64% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-  }
-  /* 朝左下微微探头，配合一次呼吸式起伏 */
-  78% {
-    transform: translate3d(calc(var(--pet-drift, 14px) * -0.5), calc(var(--pet-bob, 5px) * -1), 0)
-      rotate(calc(var(--pet-tilt, 3.5deg) * 0.5)) scale(1);
-  }
-  90% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  88% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
   }
   100% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+    transform: translate3d(0, 0, 0) rotate(0deg);
   }
 }
 
-/* --------------------------------------------------------------- speaking
- * 说话时的节奏性浮动：比 idle 快、幅度小，像在跟着语气起伏。
+/* ----------------------------------------------------------------- breathe
+ * 呼吸式浮动：只有缓慢的放大缩小，没有位移。
+ * 常驻的 .pet-breathe 层已经一直在轻微缩放，这一遍演的是「深吸一口气」，
+ * 所以幅度更大、节奏更慢，两层叠起来能看出明显的一次吸气。
  */
-@keyframes pet-speaking {
+@keyframes pet-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(calc(1 + var(--pet-breath, 0.021)));
+  }
+}
+
+/* ------------------------------------------------------------------- drift
+ * 水平漂移：左右轻微平移并回中，不带旋转 —— 与 sway 的区别是没有角度。
+ */
+@keyframes pet-drift {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  25% {
+    transform: translate3d(var(--pet-drift, 7px), calc(var(--pet-bob, 2px) * -0.4), 0);
+  }
+  50% {
+    transform: translate3d(0, 0, 0);
+  }
+  75% {
+    transform: translate3d(calc(var(--pet-drift, 7px) * -1), calc(var(--pet-bob, 2px) * -0.4), 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* ------------------------------------------------------------------- float
+ * 节奏性浮动：上下小幅浮动两次，比 sway 快、幅度小，像在跟着语气起伏。
+ */
+@keyframes pet-float {
   0%,
   100% {
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   20% {
-    transform: translate3d(calc(var(--pet-drift, 3px) * -1), calc(var(--pet-bob, 4px) * -1), 0)
-      rotate(calc(var(--pet-tilt, 1.6deg) * -1));
+    transform: translate3d(calc(var(--pet-drift, 2px) * -1), calc(var(--pet-bob, 3.5px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 1.1deg) * -1));
   }
   45% {
-    transform: translate3d(calc(var(--pet-drift, 3px) * 0.5), calc(var(--pet-bob, 4px) * -0.35), 0)
-      rotate(calc(var(--pet-tilt, 1.6deg) * 0.4));
+    transform: translate3d(calc(var(--pet-drift, 2px) * 0.5), calc(var(--pet-bob, 3.5px) * -0.35), 0)
+      rotate(calc(var(--pet-tilt, 1.1deg) * 0.4));
   }
   70% {
-    transform: translate3d(var(--pet-drift, 3px), calc(var(--pet-bob, 4px) * -0.85), 0)
-      rotate(var(--pet-tilt, 1.6deg));
+    transform: translate3d(var(--pet-drift, 2px), calc(var(--pet-bob, 3.5px) * -0.85), 0)
+      rotate(var(--pet-tilt, 1.1deg));
   }
 }
 
-/* ------------------------------------------------------------------- happy
- * 短促向上弹跳，随后带一点回弹落回原位。
+/* -------------------------------------------------------------------- hold
+ * 停顿：全程中性、什么都不做，序列里的间隔（代替冷却时间）。
+ *
+ * 它**必须有真实时长**：调度器靠这一步的 durationMs 安排兜底定时器，
+ * 万一 animationend 因为「前后两步同名」之类的意外没触发，也能按时走完。
  */
-@keyframes pet-happy {
+@keyframes pet-hold {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+}
+
+/* --------------------------------------------------------------------- hop
+ * 短促向上弹跳，随后恢复：跳起 → 落地压一下 → 余弹一次 → 站定。
+ */
+@keyframes pet-hop {
   0% {
     transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
   }
   18% {
-    transform: translate3d(0, calc(var(--pet-bob, 26px) * -1), 0)
-      rotate(calc(var(--pet-tilt, 5deg) * -1)) scale(1.04);
+    transform: translate3d(0, calc(var(--pet-bob, 18px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 3.5deg) * -1)) scale(1.04);
   }
   38% {
     transform: translate3d(0, 0, 0) rotate(0deg) scale(0.985);
   }
   55% {
-    transform: translate3d(0, calc(var(--pet-bob, 26px) * -0.28), 0) rotate(0deg) scale(1.01);
+    transform: translate3d(0, calc(var(--pet-bob, 18px) * -0.28), 0) rotate(0deg) scale(1.01);
   }
   78% {
     transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
@@ -155,168 +217,348 @@
   }
 }
 
-/* ------------------------------------------------------------------- angry
- * 短时间高频小幅震动，幅度逐渐衰减，避免看起来像卡帧。
+/* -------------------------------------------------------------------- jump
+ * 快速弹起：起跳前先下蹲蓄力（压扁）→ 窜上去并纵向拉长 → 落地压扁 → 站定。
+ * 比 hop 更快更高，靠 squash 做出「有重量」的感觉。
  */
-@keyframes pet-angry {
+@keyframes pet-jump {
   0% {
-    transform: translate3d(0, 0, 0) rotate(0deg);
+    transform: translate3d(0, 0, 0) rotate(0deg) scaleX(1) scaleY(1);
   }
-  8% {
-    transform: translate3d(calc(var(--pet-shake, 7px) * -1), 0, 0)
-      rotate(calc(var(--pet-tilt, 2.5deg) * -1));
+  /* 下蹲蓄力 */
+  10% {
+    transform: translate3d(0, calc(var(--pet-bob, 24px) * 0.18), 0) rotate(0deg)
+      scaleX(calc(1 + var(--pet-squash, 0.055))) scaleY(calc(1 - var(--pet-squash, 0.055)));
   }
-  19% {
-    transform: translate3d(var(--pet-shake, 7px), 0, 0) rotate(var(--pet-tilt, 2.5deg));
-  }
+  /* 窜到最高点，身体拉长 */
   30% {
-    transform: translate3d(calc(var(--pet-shake, 7px) * -0.85), 0, 0)
-      rotate(calc(var(--pet-tilt, 2.5deg) * -0.85));
+    transform: translate3d(0, calc(var(--pet-bob, 24px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 2.8deg) * -1))
+      scaleX(calc(1 - var(--pet-squash, 0.055) * 0.5)) scaleY(calc(1 + var(--pet-squash, 0.055) * 0.6));
   }
-  41% {
-    transform: translate3d(calc(var(--pet-shake, 7px) * 0.85), 0, 0)
-      rotate(calc(var(--pet-tilt, 2.5deg) * 0.85));
-  }
+  /* 落地受挤压 */
   52% {
-    transform: translate3d(calc(var(--pet-shake, 7px) * -0.6), 0, 0)
-      rotate(calc(var(--pet-tilt, 2.5deg) * -0.6));
+    transform: translate3d(0, 0, 0) rotate(0deg) scaleX(calc(1 + var(--pet-squash, 0.055) * 0.8))
+      scaleY(calc(1 - var(--pet-squash, 0.055) * 0.8));
   }
-  63% {
-    transform: translate3d(calc(var(--pet-shake, 7px) * 0.6), 0, 0)
-      rotate(calc(var(--pet-tilt, 2.5deg) * 0.6));
-  }
-  74% {
-    transform: translate3d(calc(var(--pet-shake, 7px) * -0.3), 0, 0)
-      rotate(calc(var(--pet-tilt, 2.5deg) * -0.3));
-  }
-  85% {
-    transform: translate3d(calc(var(--pet-shake, 7px) * 0.3), 0, 0)
-      rotate(calc(var(--pet-tilt, 2.5deg) * 0.3));
+  72% {
+    transform: translate3d(0, calc(var(--pet-bob, 24px) * -0.12), 0) rotate(0deg)
+      scaleX(calc(1 - var(--pet-squash, 0.055) * 0.3)) scaleY(calc(1 + var(--pet-squash, 0.055) * 0.3));
   }
   100% {
-    transform: translate3d(0, 0, 0) rotate(0deg);
+    transform: translate3d(0, 0, 0) rotate(0deg) scaleX(1) scaleY(1);
   }
 }
 
-/* --------------------------------------------------------------------- sad
- * 缓慢下沉并轻微倾斜，停一会儿再慢慢回来。
+/* ------------------------------------------------------------------ bounce
+ * 连续轻微弹跳：连弹三下，一下比一下轻，像笑到抖肩膀。
  */
-@keyframes pet-sad {
-  0% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-  }
-  30% {
-    transform: translate3d(0, var(--pet-sink, 18px), 0) rotate(calc(var(--pet-tilt, 7deg) * -1))
-      scale(0.985);
-  }
-  68% {
-    transform: translate3d(0, calc(var(--pet-sink, 18px) * 0.94), 0)
-      rotate(calc(var(--pet-tilt, 7deg) * -0.92)) scale(0.985);
-  }
-  100% {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-  }
-}
-
-/* --------------------------------------------------------------- surprised
- * 快速弹起并略微放大，然后落回。
- */
-@keyframes pet-surprised {
-  0% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  14% {
-    transform: translate3d(0, calc(var(--pet-bob, 30px) * -1), 0) scale(var(--pet-pop, 1.12));
-  }
-  32% {
-    transform: translate3d(0, calc(var(--pet-bob, 30px) * -0.45), 0)
-      scale(calc(1 + (var(--pet-pop, 1.12) - 1) * 0.5));
-  }
-  58% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-}
-
-/* -------------------------------------------------------------------- laugh
- * 有节奏的连续轻微弹跳，两次一组，像笑到抖肩膀。
- */
-@keyframes pet-laugh {
+@keyframes pet-bounce {
   0% {
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   10% {
-    transform: translate3d(0, calc(var(--pet-bob, 16px) * -1), 0)
-      rotate(calc(var(--pet-tilt, 4deg) * -1));
+    transform: translate3d(0, calc(var(--pet-bob, 11px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 2.8deg) * -1));
   }
   22% {
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   34% {
-    transform: translate3d(0, calc(var(--pet-bob, 16px) * -0.8), 0)
-      rotate(calc(var(--pet-tilt, 4deg) * 0.8));
+    transform: translate3d(0, calc(var(--pet-bob, 11px) * -0.8), 0)
+      rotate(calc(var(--pet-tilt, 2.8deg) * 0.8));
   }
   46% {
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   58% {
-    transform: translate3d(0, calc(var(--pet-bob, 16px) * -0.6), 0)
-      rotate(calc(var(--pet-tilt, 4deg) * -0.6));
+    transform: translate3d(0, calc(var(--pet-bob, 11px) * -0.6), 0)
+      rotate(calc(var(--pet-tilt, 2.8deg) * -0.6));
   }
   70% {
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   82% {
-    transform: translate3d(0, calc(var(--pet-bob, 16px) * -0.35), 0)
-      rotate(calc(var(--pet-tilt, 4deg) * 0.35));
+    transform: translate3d(0, calc(var(--pet-bob, 11px) * -0.35), 0)
+      rotate(calc(var(--pet-tilt, 2.8deg) * 0.35));
   }
   100% {
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
 }
 
-/* ------------------------------------------------------- 动作 → 动画绑定
- * idle / speaking 是循环动作，靠 `infinite`；其余是一次性动作，靠 scheduler
- * 监听 animationend 收尾。所有一次性动作的最后一帧都回到中性姿态，
- * 因此即使动画结束到状态切换之间有一帧间隙，角色也不会停在奇怪的姿势上。
+/* ------------------------------------------------------------------- shake
+ * 短时间高频小幅震动：左右位移带一点旋转，幅度逐级衰减（否则像卡帧）。
  */
-
-.pet-motion.is-idle {
-  animation: pet-idle var(--pet-duration, 13s) ease-in-out infinite;
-}
-
-.pet-motion.is-speaking {
-  animation: pet-speaking var(--pet-duration, 1.5s) ease-in-out infinite;
-}
-
-.pet-motion.is-happy {
-  animation: pet-happy var(--pet-duration, 900ms) cubic-bezier(0.32, 1.35, 0.5, 1) 1 both;
-}
-
-.pet-motion.is-angry {
-  animation: pet-angry var(--pet-duration, 700ms) linear 1 both;
-}
-
-.pet-motion.is-sad {
-  animation: pet-sad var(--pet-duration, 2200ms) ease-in-out 1 both;
-}
-
-.pet-motion.is-surprised {
-  animation: pet-surprised var(--pet-duration, 800ms) cubic-bezier(0.2, 1.5, 0.45, 1) 1 both;
-}
-
-.pet-motion.is-laugh {
-  animation: pet-laugh var(--pet-duration, 1400ms) ease-in-out 1 both;
-}
-
-/* 用户系统设置了「减少动态效果」时，弱化运动但仍保留状态可见性 */
-@media (prefers-reduced-motion: reduce) {
-  .pet-motion.is-idle,
-  .pet-motion.is-speaking {
-    animation-duration: 6s;
+@keyframes pet-shake {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
   }
+  8% {
+    transform: translate3d(calc(var(--pet-shake, 5px) * -1), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.8deg) * -1));
+  }
+  19% {
+    transform: translate3d(var(--pet-shake, 5px), 0, 0) rotate(var(--pet-tilt, 1.8deg));
+  }
+  30% {
+    transform: translate3d(calc(var(--pet-shake, 5px) * -0.85), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.8deg) * -0.85));
+  }
+  41% {
+    transform: translate3d(calc(var(--pet-shake, 5px) * 0.85), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.8deg) * 0.85));
+  }
+  52% {
+    transform: translate3d(calc(var(--pet-shake, 5px) * -0.6), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.8deg) * -0.6));
+  }
+  63% {
+    transform: translate3d(calc(var(--pet-shake, 5px) * 0.6), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.8deg) * 0.6));
+  }
+  74% {
+    transform: translate3d(calc(var(--pet-shake, 5px) * -0.3), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.8deg) * -0.3));
+  }
+  85% {
+    transform: translate3d(calc(var(--pet-shake, 5px) * 0.3), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.8deg) * 0.3));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+/* ------------------------------------------------------------------ wiggle
+ * 左右扭动：只转不移的小角度旋转，快速交替几次后回正。
+ * 与 shake 的唯一区别就是这里没有位移 —— 看起来是「扭身子」而不是「抖」。
+ */
+@keyframes pet-wiggle {
+  0% {
+    transform: rotate(0deg);
+  }
+  15% {
+    transform: rotate(var(--pet-tilt, 3.5deg));
+  }
+  32% {
+    transform: rotate(calc(var(--pet-tilt, 3.5deg) * -1));
+  }
+  49% {
+    transform: rotate(calc(var(--pet-tilt, 3.5deg) * 0.7));
+  }
+  66% {
+    transform: rotate(calc(var(--pet-tilt, 3.5deg) * -0.5));
+  }
+  83% {
+    transform: rotate(calc(var(--pet-tilt, 3.5deg) * 0.25));
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+/* -------------------------------------------------------------------- sink
+ * 缓慢下沉并轻微倾斜，停一会儿再慢慢回到原位。
+ */
+@keyframes pet-sink {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  30% {
+    transform: translate3d(0, var(--pet-sink, 12px), 0) rotate(calc(var(--pet-tilt, 5deg) * -1))
+      scale(0.985);
+  }
+  68% {
+    transform: translate3d(0, calc(var(--pet-sink, 12px) * 0.94), 0)
+      rotate(calc(var(--pet-tilt, 5deg) * -0.92)) scale(0.985);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+}
+
+/* -------------------------------------------------------------------- tilt
+ * 轻微倾斜：慢慢倒向一侧 → 停住（倒下去之后就不动了）→ 回正。
+ */
+@keyframes pet-tilt {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  32% {
+    transform: translate3d(calc(var(--pet-drift, 2px) * -1), 0, 0)
+      rotate(calc(var(--pet-tilt, 5.5deg) * -1));
+  }
+  /* 停住不动 */
+  66% {
+    transform: translate3d(calc(var(--pet-drift, 2px) * -1), 0, 0)
+      rotate(calc(var(--pet-tilt, 5.5deg) * -1));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+/* --------------------------------------------------------------------- nod
+ * 点头式上下：快速向下一沉再回，带一点点前倾，像应了一声。
+ */
+@keyframes pet-nod {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  28% {
+    transform: translate3d(0, var(--pet-bob, 6px), 0) rotate(var(--pet-tilt, 1.4deg));
+  }
+  52% {
+    transform: translate3d(0, calc(var(--pet-bob, 6px) * -0.25), 0) rotate(0deg);
+  }
+  74% {
+    transform: translate3d(0, calc(var(--pet-bob, 6px) * 0.18), 0) rotate(calc(var(--pet-tilt, 1.4deg) * 0.5));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+/* ------------------------------------------------------------------ squash
+ * 压缩回弹：落地受力那样先横向撑开、纵向压扁，再纵向拉长回弹，最后站定。
+ * 这是唯一一个「只有非等比缩放」的动作，靠 scaleX / scaleY 分别给值。
+ */
+@keyframes pet-squash {
+  0% {
+    transform: translate3d(0, 0, 0) scaleX(1) scaleY(1);
+  }
+  22% {
+    transform: translate3d(0, var(--pet-bob, 4px), 0) scaleX(calc(1 + var(--pet-squash, 0.07)))
+      scaleY(calc(1 - var(--pet-squash, 0.07)));
+  }
+  50% {
+    transform: translate3d(0, calc(var(--pet-bob, 4px) * -0.5), 0)
+      scaleX(calc(1 - var(--pet-squash, 0.07) * 0.5)) scaleY(calc(1 + var(--pet-squash, 0.07) * 0.6));
+  }
+  76% {
+    transform: translate3d(0, calc(var(--pet-bob, 4px) * 0.15), 0)
+      scaleX(calc(1 + var(--pet-squash, 0.07) * 0.2)) scaleY(calc(1 - var(--pet-squash, 0.07) * 0.2));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scaleX(1) scaleY(1);
+  }
+}
+
+/* --------------------------------------------------------------------- pop
+ * 略微放大，随即回原状：出去快、回来慢并带一点过冲，只有缩放没有位移。
+ */
+@keyframes pet-pop {
+  0% {
+    transform: scale(1);
+  }
+  16% {
+    transform: scale(var(--pet-pop, 1.08));
+  }
+  42% {
+    transform: scale(calc(1 - (var(--pet-pop, 1.08) - 1) * 0.35));
+  }
+  68% {
+    transform: scale(calc(1 + (var(--pet-pop, 1.08) - 1) * 0.15));
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ============================================================================
+ * 动作 → 动画绑定
+ *
+ * 一律 `1 both`，**没有 infinite** —— 动作只演一遍，要不要循环看表情的 `loop`
+ * （DEV.md §4.3）。时长只有 `--pet-duration` 一个来源，由动作的 durationMs 推导；
+ * 下面 var() 里的时长默认值与 theme.json 同步（`tools/fit_check.py` 会核对
+ * 这里的 animation-name 和 theme.json 的动作名是否一致 —— 名字打错等于这一段动画
+ * 整个被浏览器丢掉，动作看着「没反应」，而控制台一声不吭）。
+ *
+ * 缓动函数是「这段动作是什么性格」的一部分，所以留在这里而不是塞进 theme.json：
+ * 配置里该调的是幅度和时长，缓动写在这里改一次就对所有用它的表情生效。
+ *
+ * **缓动函数不许过冲**：`cubic-bezier(a, b, c, d)` 里 b、d 必须 ≤ 1。
+ * 过冲的缓动（比如 `0.32, 1.35, ...`）会让中间某一刻的位移**超过**关键帧上写的值，
+ * 而 fit_check.py 只按关键帧取值算越界 —— 那样它报的数就悄悄变成了下限，不再可信。
+ * 弹回调子的「余弹」靠多加一两个关键帧做（见 hop 的 38% / 55%），不靠缓动过冲。
+ * fit_check.py 会扫这里的 cubic-bezier 参数并把过冲的报成错误。
+ *
+ * 另外：**一次性表情的每一步不要超过三秒半左右**。中途来的新表情要等当前这一拍演完
+ * 才换（DEV.md §4.4），这一个数就是切换延迟的上限。全库时长在 2026-10-16
+ * 统一乘过 1.4（动作整体放慢），所以这条线也跟着从两秒半抬到三秒半；
+ * 眼下最长的一拍是 `tilt`（3400ms），刚好在这条线内。
+ * ========================================================================== */
+
+.pet-motion.is-sway {
+  animation: pet-sway var(--pet-duration, 6000ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-breathe {
+  animation: pet-breathe var(--pet-duration, 3500ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-drift {
+  animation: pet-drift var(--pet-duration, 4500ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-float {
+  animation: pet-float var(--pet-duration, 2000ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-hold {
+  animation: pet-hold var(--pet-duration, 1200ms) linear 1 both;
+}
+
+.pet-motion.is-hop {
+  animation: pet-hop var(--pet-duration, 1300ms) cubic-bezier(0.3, 0.85, 0.45, 1) 1 both;
+}
+
+.pet-motion.is-jump {
+  animation: pet-jump var(--pet-duration, 900ms) cubic-bezier(0.3, 0.9, 0.45, 1) 1 both;
+}
+
+.pet-motion.is-bounce {
+  animation: pet-bounce var(--pet-duration, 2000ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-shake {
+  animation: pet-shake var(--pet-duration, 1000ms) linear 1 both;
+}
+
+.pet-motion.is-wiggle {
+  animation: pet-wiggle var(--pet-duration, 1300ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-sink {
+  animation: pet-sink var(--pet-duration, 3000ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-tilt {
+  animation: pet-tilt var(--pet-duration, 3400ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-nod {
+  animation: pet-nod var(--pet-duration, 1000ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-squash {
+  animation: pet-squash var(--pet-duration, 1100ms) cubic-bezier(0.34, 0.9, 0.5, 1) 1 both;
+}
+
+.pet-motion.is-pop {
+  animation: pet-pop var(--pet-duration, 850ms) cubic-bezier(0.22, 0.9, 0.45, 1) 1 both;
+}
+
+/* ----------------------------------------------------------------------------
+ * 用户系统设置了「减少动态效果」时：把动作动画整个关掉，但**状态机照常走**。
+ *
+ * 不能用「时长缩到 1ms」那种做法 —— 调度器是按 durationMs 排兜底定时器的，
+ * 时长一变，序列会以毫秒级疯狂推进（定时器 + animationend 打转），
+ * 表情会在一瞬间闪完。这里让每一步按原时长走完、只是画面不动。
+ * -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .pet-motion,
   .pet-breathe {
     animation: none;
   }

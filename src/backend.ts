@@ -7,7 +7,13 @@ import {
   isPetDebug,
   isPetEventKind,
 } from './types/events'
-import type { MenuEntry, PetDebug, PetEvent } from './types/events'
+import type { MenuEntry, PetDebug, PetEvent, PetEventKind } from './types/events'
+import {
+  PET_STATE_CHANNEL,
+  PET_STATE_REQUEST_CHANNEL,
+  isPetState,
+} from './types/pet-state'
+import type { PetState } from './types/pet-state'
 
 /**
  * 与 Rust 后端的薄封装。
@@ -114,6 +120,69 @@ export async function setDebug(enabled: boolean): Promise<boolean | null> {
   if (!isTauri) return null
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<boolean>('set_debug', { enabled })
+}
+
+/**
+ * 开关调试窗口，返回窗口此后的状态（true = 现在开着）。
+ *
+ * 调试界面是**独立的 Tauri 窗口**而不是角色窗口里的浮层：
+ * 角色窗口只有角色框那么大，浮层要么遮住角色、要么小到看不全，
+ * 而独立窗口可以随便拉大，且不会跟角色抢那点空间。
+ */
+export async function toggleDebugWindow(): Promise<boolean | null> {
+  if (!isTauri) {
+    // 纯浏览器里没有第二个窗口可开，说清楚而不是静默失败
+    console.warn('[pet] 非 Tauri 环境，调试窗口不可用（请用 npm run tauri dev）')
+    return null
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<boolean>('toggle_debug_window')
+}
+
+/** 广播角色窗口自己的动画状态快照，给调试窗口看 */
+export async function emitPetState(state: PetState): Promise<void> {
+  if (!isTauri) return
+  const { emit } = await import('@tauri-apps/api/event')
+  await emit(PET_STATE_CHANNEL, state)
+}
+
+/** 订阅角色窗口的状态快照（调试窗口用） */
+export async function listenPetState(handler: (state: PetState) => void): Promise<Unlisten> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<unknown>(PET_STATE_CHANNEL, (incoming) => {
+    if (isPetState(incoming.payload)) handler(incoming.payload)
+  })
+}
+
+/** 请角色窗口补发一份当前状态（调试窗口刚打开时用，见 pet-state.ts） */
+export async function requestPetState(): Promise<void> {
+  if (!isTauri) return
+  const { emit } = await import('@tauri-apps/api/event')
+  await emit(PET_STATE_REQUEST_CHANNEL)
+}
+
+/** 角色窗口侧：响应补发请求 */
+export async function listenPetStateRequest(handler: () => void): Promise<Unlisten> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen(PET_STATE_REQUEST_CHANNEL, () => handler())
+}
+
+/**
+ * 触发一个标准化事件（调试窗口的按钮走这里）。
+ *
+ * 走的是和真实链路**同一条** `pet://event` 通道：调试窗口直接广播，
+ * 角色窗口已经在监听它，所以不需要为此新增任何后端命令，
+ * 也不可能出现「调试能过、真实链路不行」这种只在一条路上成立的假通过。
+ */
+export async function emitPetEvent(kind: PetEventKind): Promise<void> {
+  if (!isTauri) {
+    console.warn('[pet] 非 Tauri 环境，事件无法送达角色窗口')
+    return
+  }
+  const { emit } = await import('@tauri-apps/api/event')
+  await emit(PET_EVENT_CHANNEL, { kind, ts: Date.now() } satisfies PetEvent)
 }
 
 /** 纯浏览器模式下的菜单，仅用于脱离 Rust 验证动画时也能右键 */

@@ -30,7 +30,10 @@ export type PetEventKind =
 
 export interface PetEvent {
   kind: PetEventKind
-  /** 事件产生时刻（Unix 毫秒），用于诊断与动画冷却计算 */
+  /**
+   * 事件产生时刻（Unix 毫秒）。**只用于诊断**：调试窗口显示「最近事件」时带上它，
+   * 好看出两条事件之间隔了多久（动画层没有冷却计算，见 scheduler.ts）。
+   */
   ts: number
 }
 

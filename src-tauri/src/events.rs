@@ -104,7 +104,8 @@ impl PetEventKind {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct PetEvent {
     pub kind: PetEventKind,
-    /// 事件产生时刻（Unix 毫秒），供前端做冷却计算与诊断
+    /// 事件产生时刻（Unix 毫秒）。**只用于诊断** —— 前端没有冷却计算，
+    /// 动画的节奏由表情序列里的停顿决定（见 DEV.md §4.4），这里只用来显示两条事件隔了多久。
     pub ts: i64,
 }
 

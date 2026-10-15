@@ -4,33 +4,74 @@ import ContextMenu from './components/ContextMenu.vue'
 import PetCharacter from './components/PetCharacter.vue'
 import { AnimationScheduler } from './anim/scheduler'
 import {
+  emitPetState,
   fetchMenuItems,
   listenAlwaysOnTop,
-  listenDebug,
   listenPetEvents,
+  listenPetStateRequest,
   listenShutdown,
   quitApp,
-  setDebug,
   toggleAlwaysOnTop,
+  toggleDebugWindow,
 } from './backend'
 import { loadTheme } from './theme/registry'
 import {
   MENU_QUIT,
   MENU_TOGGLE_TOPMOST,
-  PET_EVENT_KINDS,
-  type DebugLevel,
-  type DebugTranscript,
   type MenuEntry,
   type PetEvent,
-  type PetEventKind,
 } from './types/events'
-import { ACTION_NAMES, type ActionName } from './types/theme'
+import type { PetState } from './types/pet-state'
 
 const theme = loadTheme()
 const scheduler = new AnimationScheduler(theme.definition)
 
-const currentAction = computed(() => scheduler.current.value)
+const currentExpression = computed(() => scheduler.expression.value)
+const currentMotion = computed(() => scheduler.motion.value)
 const voiceActive = computed(() => scheduler.voiceActive.value)
+
+/**
+ * 角色框尺寸（theme.json 的 `stage`）。
+ *
+ * 窗口与它**等大**（DEV.md §3.1）：两个数对不上都不是小事，所以这里顺手校验一次。
+ */
+const stageVars = computed(() => ({
+  '--pet-stage-width': `${theme.definition.stage.width}px`,
+  '--pet-stage-height': `${theme.definition.stage.height}px`,
+}))
+
+/**
+ * 校验窗口尺寸与角色框尺寸是否相等 —— 按 DEV.md §3.1，这两个数**必须相等**。
+ *
+ * 两个方向的偏差都要报，但原因完全不同：
+ * - 窗口偏小：角色被窗口边整体裁掉，一眼能看出是坏的；
+ * - 窗口偏大：多出一圈看不见的透明余量，角色贴不到屏幕边角，而且那圈余量仍然
+ *   接收鼠标事件（压到任务栏上时那一块就点不动）。
+ *
+ * 相等时保持沉默 —— 那是正常状态，不是「没有余量」的警告。
+ * 至于动画越界多少像素、有没有被切，用 `python -I tools/fit_check.py` 看，这里不算。
+ */
+function checkStageFitsWindow() {
+  const { width, height } = theme.definition.stage
+  const extraX = window.innerWidth - width
+  const extraY = window.innerHeight - height
+
+  if (extraX < 0 || extraY < 0) {
+    console.error(
+      `[pet] 窗口 ${window.innerWidth}×${window.innerHeight} 比角色框 ${width}×${height} 还小，` +
+        '角色会被窗口边裁掉。请把 tauri.conf.json 的窗口尺寸改成与 theme.json 的 stage 相等。',
+    )
+    return
+  }
+
+  if (extraX > 0 || extraY > 0) {
+    console.warn(
+      `[pet] 窗口 ${window.innerWidth}×${window.innerHeight} 比角色框 ${width}×${height} 大 ` +
+        `${extraX}×${extraY}px：多出来的透明余量看不见，但会接收鼠标事件（压住任务栏时那块就点不动），` +
+        '角色也因此贴不到屏幕边角。两处尺寸应保持相等（DEV.md §3.1）。',
+    )
+  }
+}
 
 /**
  * 角色右键菜单。
@@ -51,8 +92,15 @@ async function refreshMenuItems() {
   }
 }
 
-function openMenu(payload: { x: number; y: number }) {
-  menuPosition.value = payload
+/**
+ * 右键菜单挂在窗口根节点而不是角色上：窗口内任何位置右键都要有反应 ——
+ * 包括 PNG 轮廓之外的透明像素，以及动画把角色挪开后露出的空白。
+ * 挂在角色上的话，用户在这些地方右键会毫无反应，而他并不知道
+ * 自己刚才点的是「窗口里但角色外」。
+ */
+function openMenu(event: MouseEvent) {
+  event.preventDefault()
+  menuPosition.value = { x: event.clientX, y: event.clientY }
   menuVisible.value = true
   // 菜单可能已经因为托盘切换而过期（本窗口置顶时开着菜单又被托盘切了状态），
   // 每次打开都重新取一次，代价是一次 IPC，比显示错文案划算
@@ -102,99 +150,69 @@ onMounted(async () => {
       void refreshMenuItems()
     }),
   )
-  unlisteners.push(await listenDebug(onDebug))
+  unlisteners.push(await listenPetStateRequest(publishState))
   await refreshMenuItems()
   window.addEventListener('keydown', onKeydown)
+  checkStageFitsWindow()
+  // 调试窗口可能已经开着（前端热重载时就会这样），补发一份当前状态
+  publishState()
 })
 
 onBeforeUnmount(() => {
   for (const off of unlisteners) off()
   window.removeEventListener('keydown', onKeydown)
-  // 别把后端的推送开关留在打开状态
-  void setDebug(false)
+  // 这里**不**动 setDebug：诊断推送的开关归调试窗口管（它自己挂载时开、
+  // 卸载时关，窗口被强关时还有后端的 Destroyed 兜底）。角色窗口顺手关一下
+  // 看着稳妥，实际会在热重载时把还开着的调试窗口的推送一起关掉 ——
+  // 改一行 App.vue 就发现面板不再刷新，排查起来很费劲。
   scheduler.dispose()
 })
 
-// ------------------------------------------------------------ 调试面板(验收用)
+// ------------------------------------------------------------ 调试窗口入口
 //
-// 按 D 打开。它让阶段 2 可以完全不依赖麦克风验收：
-// 手动触发任意动作与任意标准化事件，观察调度、优先级、冷却和返回行为。
-
-const debugVisible = ref(false)
+// 按 D 打开/关闭**独立的调试窗口**（src-tauri 那边创建，页面是 debug.html）。
+// 它让阶段 2 可以完全不依赖麦克风验收：手动触发任意表情与任意标准化事件，
+// 观察序列推进、排队切换、优先级打断和返回行为；面板里还有一份动作库清单。
+//
+// 之所以不做成这个窗口里的浮层：角色窗口就是角色大小（160×160），浮层要么遮住角色、
+// 要么小到看不全 —— 这两件事正好是本来的问题。
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'd' || event.key === 'D') {
     if (event.target instanceof HTMLInputElement) return
-    debugVisible.value = !debugVisible.value
+    void toggleDebugWindow()
   }
 }
 
-// -------------------------------------------------------- 实时诊断（语音链路的现场）
+// ------------------------------------------------------ 状态广播（给调试窗口）
 //
-// 动画调试只能告诉你「表现层收到什么」，看不到「模型到底听到了什么」。
-// 这几项补上后半段：原始识别文本、语言、模型给的原始情绪/事件 token、
-// 推理耗时，以及输入电平 —— 全是数字静音时，识别不出来就是必然的，
-// 光看动画是发现不了的。
+// 调度器的状态只存在于这个窗口里，调试窗口要靠广播才看得到。
+// 只在状态真的变了时发一条 —— 电平那种高频数据走的是后端另一条通道。
 
-const level = ref<DebugLevel | null>(null)
-/** 最近若干条识别结果，新的在前 */
-const transcripts = ref<DebugTranscript[]>([])
-const MAX_TRANSCRIPTS = 8
+const petState = computed<PetState>(() => ({
+  expression: currentExpression.value,
+  motion: currentMotion.value,
+  stepIndex: scheduler.stepIndex.value,
+  stepCount: scheduler.stepCount.value,
+  voiceActive: voiceActive.value,
+  pendingTimers: scheduler.pendingTimers.value,
+  lastEvent: lastEvent.value,
+}))
 
-function onDebug(info: DebugTranscript | DebugLevel) {
-  if (info.type === 'level') {
-    level.value = info
-    return
-  }
-  // 语言/情绪/事件都可能是空串（模型未返回），显示成 ∅ 而不是留白，
-  // 否则分不清「没识别出来」和「这一栏根本不显示」
-  transcripts.value = [info, ...transcripts.value].slice(0, MAX_TRANSCRIPTS)
+function publishState() {
+  void emitPetState(petState.value)
 }
 
-/** 面板开着才让后端推数据；关掉就停，正常运行不背这份开销 */
-watch(debugVisible, (visible) => {
-  void setDebug(visible)
-})
-
-/** 线性幅度 → dBFS。-60 以下按静音显示，避免 -inf 刷屏 */
-function dbfs(amplitude: number): string {
-  if (amplitude <= 0) return '-∞'
-  return (20 * Math.log10(amplitude)).toFixed(1)
-}
-
-/** dBFS 映射到 0–100 的条形宽度，-60 dBFS 以下算空 */
-function levelPercent(amplitude: number): number {
-  if (amplitude <= 0) return 0
-  const db = 20 * Math.log10(amplitude)
-  return Math.max(0, Math.min(100, ((db + 60) / 60) * 100))
-}
-
-function triggerAction(action: ActionName) {
-  // 直接走事件通道，保证调试路径和真实路径是同一套逻辑
-  const kindByAction: Record<ActionName, PetEventKind> = {
-    idle: 'idle',
-    speaking: 'voice_start',
-    happy: 'happy',
-    angry: 'angry',
-    sad: 'sad',
-    surprised: 'surprised',
-    laugh: 'laugh',
-  }
-  applyEvent({ kind: kindByAction[action], ts: Date.now() })
-}
-
-function emitKind(kind: PetEventKind) {
-  applyEvent({ kind, ts: Date.now() })
-}
+watch(petState, publishState)
 </script>
 
 <template>
-  <div class="pet-app">
+  <div class="pet-app" :style="stageVars" data-tauri-drag-region @contextmenu="openMenu">
     <PetCharacter
       :theme="theme"
-      :action="currentAction"
+      :expression="currentExpression"
+      :motion="currentMotion"
       @animationend="scheduler.handleAnimationEnd($event)"
-      @contextmenu="openMenu"
     />
 
     <ContextMenu
@@ -205,182 +223,23 @@ function emitKind(kind: PetEventKind) {
       @select="onMenuSelect"
       @close="menuVisible = false"
     />
-
-    <section v-if="debugVisible" class="pet-debug">
-      <header class="pet-debug__header">
-        <strong>动画调试</strong>
-        <span class="pet-debug__meta">
-          当前: <b>{{ currentAction }}</b>
-          · 人声: {{ voiceActive ? '有' : '无' }}
-          · 定时器: {{ scheduler.pendingTimers }}
-        </span>
-      </header>
-
-      <p class="pet-debug__label">动作</p>
-      <div class="pet-debug__row">
-        <button v-for="a in ACTION_NAMES" :key="a" type="button" @click="triggerAction(a)">
-          {{ a }}
-        </button>
-      </div>
-
-      <p class="pet-debug__label">标准化事件</p>
-      <div class="pet-debug__row">
-        <button v-for="k in PET_EVENT_KINDS" :key="k" type="button" @click="emitKind(k)">
-          {{ k }}
-        </button>
-      </div>
-
-      <p class="pet-debug__last">
-        最近事件: <code>{{ lastEvent ? `${lastEvent.kind} @ ${lastEvent.ts}` : '无' }}</code>
-      </p>
-
-      <hr class="pet-debug__sep" />
-
-      <p class="pet-debug__meta">
-        输入电平: <b>{{ level ? dbfs(level.peak) : '—' }}</b> dBFS
-        · 有效值 {{ level ? dbfs(level.rms) : '—' }} dBFS
-        · 丢弃 {{ level?.dropped ?? 0 }} 块
-        · 驱动错误 {{ level?.capture_errors ?? 0 }} 次
-      </p>
-      <div class="pet-debug__meter">
-        <div class="pet-debug__meter-fill" :style="{ width: `${levelPercent(level?.peak ?? 0)}%` }" />
-      </div>
-
-      <p class="pet-debug__label">识别（模型原始输出，新→旧）</p>
-      <p v-if="transcripts.length === 0" class="pet-debug__meta">
-        暂无。对着麦克风说句话；电平一直是 -∞ 说明设备没送音频上来。
-      </p>
-      <ul v-else class="pet-debug__log">
-        <li v-for="(t, i) in transcripts" :key="`${t.audio_secs}-${i}`">
-          <span :class="t.segment ? 'pet-debug__seg' : 'pet-debug__interim'">
-            {{ t.segment ? '段' : '中' }}
-          </span>
-          {{ t.audio_secs.toFixed(2) }}s · {{ t.elapsed_ms }}ms ·
-          {{ t.lang || '∅' }} · {{ t.emotion || '∅' }} · {{ t.event || '∅' }} ·
-          <code>{{ t.text || '（空）' }}</code>
-        </li>
-      </ul>
-    </section>
   </div>
 </template>
 
 <style scoped>
+/**
+ * 角色居中于窗口。
+ *
+ * 窗口与角色框等大，所以居中之后两者是重合的（见 DEV.md §3.1）。
+ * 仍然用 flex 居中而不是让角色框贴着左上角：动画的位移和缩放都是相对角色框的中心算的，
+ * 角色框一旦偏移，某一侧就会先被窗口边裁掉。
+ */
 .pet-app {
   width: 100%;
   height: 100%;
   position: relative;
-}
-
-.pet-debug {
-  position: fixed;
-  left: 6px;
-  bottom: 6px;
-  right: 6px;
-  /* 加进诊断区之后内容多了不少，窗口本身只有 320×320，
-     留太少高度就得一直滚，反而看不见电平的实时变化 */
-  max-height: 72%;
-  overflow: auto;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(18, 18, 22, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: #e8e8ee;
-  font-family: Consolas, 'Courier New', monospace;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.pet-debug__header {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-bottom: 6px;
-}
-
-.pet-debug__meta {
-  color: #9fa3b0;
-}
-
-.pet-debug__label {
-  margin: 6px 0 3px;
-  color: #9fa3b0;
-}
-
-.pet-debug__row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.pet-debug__row button {
-  padding: 2px 7px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.pet-debug__row button:hover {
-  background: rgba(255, 255, 255, 0.18);
-}
-
-.pet-debug__last {
-  margin: 6px 0 0;
-  color: #9fa3b0;
-  word-break: break-all;
-}
-
-.pet-debug__sep {
-  margin: 8px 0 6px;
-  border: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.14);
-}
-
-.pet-debug__meter {
-  height: 5px;
-  margin: 4px 0 8px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.1);
-  overflow: hidden;
-}
-
-.pet-debug__meter-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #4ade80, #facc15 70%, #f87171);
-  transition: width 0.08s linear;
-}
-
-.pet-debug__log {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.pet-debug__log li {
-  padding: 1px 0;
-  color: #c9ccd6;
-  word-break: break-all;
-}
-
-.pet-debug__seg,
-.pet-debug__interim {
-  display: inline-block;
-  width: 1.1em;
-  margin-right: 4px;
-  border-radius: 3px;
-  text-align: center;
-  color: #12121a;
-}
-
-/* 语音段是权威解码，中间解码只是过程中的近似，用颜色区分强调程度 */
-.pet-debug__seg {
-  background: #7dd3fc;
-}
-
-.pet-debug__interim {
-  background: #6b7280;
-  color: #e8e8ee;
+  align-items: center;
+  justify-content: center;
 }
 </style>

@@ -47,7 +47,8 @@ pub fn run() {
             commands::exit_app,
             commands::toggle_always_on_top,
             commands::menu_items,
-            commands::set_debug
+            commands::set_debug,
+            commands::toggle_debug_window
         ])
         .setup(|app| {
             let handle = app.handle().clone();
