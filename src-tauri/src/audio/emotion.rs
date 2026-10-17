@@ -57,9 +57,10 @@ fn normalize_tag(tag: &str) -> String {
 
 /// `<|HAPPY|>` → `Emotion::Happy`
 ///
-/// 刻意不处理 FEARFUL / DISGUSTED：DEV.md §4.3 的动作表里没有对应动画，
-/// 硬映射成「惊讶」之类属于凭空发明语义。第一版把它们当 Unknown 忽略并打日志，
-/// 等实际麦克风测试阶段拿到数据后再决定是否需要扩展动作集。
+/// FEARFUL / DISGUSTED 没有独立的表情素材，先复用语义最接近的现有表情：
+/// 害怕 → 惊讶（受惊、弹起来），厌恶 → 生气（负面、抗拒）。
+/// 这是有意的近似，不是标签识别失败 —— 原始标签仍会原样出现在 `[语音段]`
+/// 日志里，等以后做了独立表情再拆出来即可。
 pub fn parse_emotion(tag: &str) -> Emotion {
     match normalize_tag(tag).as_str() {
         "HAPPY" => Emotion::Happy,
@@ -67,6 +68,9 @@ pub fn parse_emotion(tag: &str) -> Emotion {
         "SAD" => Emotion::Sad,
         "SURPRISED" => Emotion::Surprised,
         "NEUTRAL" => Emotion::Neutral,
+        // 没有专门的表情图，复用最接近的一个
+        "FEARFUL" => Emotion::Surprised,
+        "DISGUSTED" => Emotion::Angry,
         // 模型明确表示「这段判不出情绪」（静音、噪声、太短、语气音）。
         // 这是正常结果，不是「出现了没映射的新标签」，所以不刷 debug 日志。
         // `[语音段]` 日志仍会原样打印这个标签，方便排查。
@@ -306,11 +310,17 @@ mod tests {
     #[test]
     fn unmapped_and_empty_emotions_are_unknown() {
         assert_eq!(parse_emotion(""), Emotion::Unknown);
-        // 第一版不处理这两类，必须是 Unknown 而不是被硬映射
-        assert_eq!(parse_emotion("<|FEARFUL|>"), Emotion::Unknown);
-        assert_eq!(parse_emotion("<|DISGUSTED|>"), Emotion::Unknown);
         // 模型明确说「判不出情绪」，同样归为 Unknown（且不算未映射标签）
         assert_eq!(parse_emotion("<|EMO_UNKNOWN|>"), Emotion::Unknown);
+        // 真正没映射的标签（模型词表里情绪之外的特殊 token）
+        assert_eq!(parse_emotion("<|SPECIAL_TOKEN_1|>"), Emotion::Unknown);
+    }
+
+    #[test]
+    fn fearful_and_disgusted_reuse_existing_expressions() {
+        // 没有独立素材，先接到最接近的现有表情（见 parse_emotion 的说明）
+        assert_eq!(parse_emotion("<|FEARFUL|>"), Emotion::Surprised);
+        assert_eq!(parse_emotion("<|DISGUSTED|>"), Emotion::Angry);
     }
 
     #[test]
@@ -318,6 +328,46 @@ mod tests {
         assert_eq!(parse_event("<|Laughter|>"), SoundEvent::Laughter);
         assert_eq!(parse_event("<|Speech|>"), SoundEvent::Other);
         assert_eq!(parse_event(""), SoundEvent::None);
+    }
+
+    #[test]
+    fn single_observation_is_enough_when_window_is_one() {
+        // 2026-10-17 定：只要识别出一次情绪就立刻切表情，不要求「连续两次」。
+        // 窗口为 1 时，第一次有效观察必须马上上报 —— 这条锁住这个语义，
+        // 防止以后又把默认值或判断条件改回「攒两次」。
+        let mut cfg = cfg();
+        cfg.emotion_consistency_windows = 1;
+        let mut s = Stabilizer::new(cfg, Instant::now());
+        let t = Instant::now();
+        assert_eq!(
+            s.on_transcript("<|ANGRY|>", "", t),
+            vec![PetEventKind::Angry],
+            "一次识别就应该立刻切到生气表情"
+        );
+    }
+
+    #[test]
+    fn window_one_repeats_on_the_next_utterance() {
+        // 同一个情绪在下一句话里仍然要重新上报：前端动画是一次性的，
+        // 不重新上报的话，主播一直生气、宠物只演一遍就停了。
+        let mut cfg = cfg();
+        cfg.emotion_consistency_windows = 1;
+        let mut s = Stabilizer::new(cfg, Instant::now());
+        let t = Instant::now();
+
+        s.on_voice_start(t);
+        assert_eq!(
+            s.on_transcript("<|ANGRY|>", "", t),
+            vec![PetEventKind::Angry]
+        );
+        s.on_voice_end(t);
+
+        s.on_voice_start(t);
+        assert_eq!(
+            s.on_transcript("<|ANGRY|>", "", t),
+            vec![PetEventKind::Angry],
+            "下一句话里的同一情绪应当再次触发"
+        );
     }
 
     #[test]

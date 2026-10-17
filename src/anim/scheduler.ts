@@ -16,6 +16,16 @@ const UNKNOWN_MOTION_MS = 800
 const MOTION_FALLBACK = 'hold'
 
 /**
+ * 表情优先级（DEV.md §4.4）：idle(0) < speaking(1) < 其他表情(2)。
+ *
+ * 数值本身只用来做一件事：低优先级的背景表情不能打断高优先级的情绪序列。
+ * 情绪之间是同级的，谁被请求谁立刻上 —— 「除非出现别的表情」。
+ */
+const IDLE_PRIORITY = 0
+const SPEAKING_PRIORITY = 1
+const EMOTION_PRIORITY = 2
+
+/**
  * 统一动画调度器（DEV.md §4.4）。
  *
  * 设计要点：
@@ -24,12 +34,14 @@ const MOTION_FALLBACK = 'hold'
  *    所以渲染层始终是单层 `.pet-motion`，不需要为「动作叠加」再套一层 DOM。
  *  - **没有冷却时间**：序列里的 `hold`（停顿）就承担了原来冷却的作用（DEV.md §4.4）。
  *    同一个表情重复触发一律忽略，否则「连着说两次开心」会让动画永远停在第一步。
- *  - 中途来了别的表情：**立刻打断**，从新表情的第 0 步开始演（2026-10-17 改）。
- *    模型/后端确认新表情时，画面上就不该再留着旧表情的尾巴；代价是正在演的那一拍
- *    会被切在半路，但比起「新情绪已经很明显、角色还在慢慢收上一个动作」，
- *    切一半反而更像活物。所以不再有排队槽，也不再需要优先级。
+ *  - **情绪表情一次识别就立刻打断**，从新表情的第 0 步开始演（2026-10-17 改）。
+ *    后端只会在情绪真的变化时才发事件；这时候画面上不该再留着旧表情的尾巴。
+ *  - **优先级只用来挡背景表情**（2026-10-17 定）：idle(0) < speaking(1) < 其他表情(2)。
+ *    反过来，idle / speaking 不能打断正在演的情绪序列 —— 生气要完整演完，
+ *    除非又出现了别的表情。两个背景表情之间（idle ↔ speaking）可以直接换，
+ *    那是「声音开始 / 静音超时」的状态切换，不算打断表情。
  *  - **同一个表情重复触发一律忽略**：这不是打断，否则同一情绪每句话都从第 0 步重来，
- *    会让序列退化成只演第一步。
+ *    会让序列退化成只演第一步；而且情绪序列本来就要完整演完。
  *  - 每一拍配一个**唯一**的兜底定时器，加上静音超时，同一时刻最多两个（见 pendingTimers）。
  *  - dispose() 清空全部定时器，程序退出后不遗留动画任务。
  */
@@ -91,7 +103,8 @@ export class AnimationScheduler {
     switch (kind) {
       case 'voice_start':
       case 'neutral':
-        // 说话是基准状态：一开口就切回 speaking（若正在演情绪，也会被立即打断）。
+        // 说话是基准状态：一开口就切回 speaking。
+        // 正在演的情绪不会被它打断（优先级更高），情绪演完自然回到 speaking。
         this.voiceActive.value = true
         this.baseExpression = this.theme.baseState.voiceActive
         this.request(this.baseExpression)
@@ -105,6 +118,8 @@ export class AnimationScheduler {
       case 'idle':
         this.voiceActive.value = false
         this.baseExpression = this.theme.baseState.silent
+        // 若正在演情绪，这里会被优先级挡下：等那一列演完，advance() 会自己回
+        // baseExpression（此时已经是 idle），不需要把情绪切掉。
         this.request(this.baseExpression)
         return
 
@@ -145,13 +160,34 @@ export class AnimationScheduler {
   }
 
   /**
+   * 表情优先级：idle < speaking < 其他表情。
+   *
+   * 以 `baseState` 里配的两个名字为准，不硬编码 `idle` / `speaking` 字符串 ——
+   * 换主题时基础表情可以叫别的名字。
+   */
+  private priorityOf(expression: ExpressionName): number {
+    if (expression === this.theme.baseState.silent) return IDLE_PRIORITY
+    if (expression === this.theme.baseState.voiceActive) return SPEAKING_PRIORITY
+    return EMOTION_PRIORITY
+  }
+
+  /**
    * 请求演一个表情。
    *
-   * 已经在演的就忽略（避免同一情绪重复触发时序列卡在第 0 步），
-   * 否则**立刻从第 0 步开始演**，不管当前演到哪、也不管是谁更「优先」。
+   * 规则（DEV.md §4.4）：
+   *  - 已经在演的忽略（否则同一情绪每句话都从第 0 步重来，序列退化成只演第一拍）；
+   *  - 情绪一律**立刻打断**当前画面（包括另一个情绪），从第 0 步开始演；
+   *  - idle / speaking 不能打断正在演的情绪 —— 生气要演完，除非又出现了别的表情；
+   *  - idle ↔ speaking 之间可以直接换：它们是同一层背景状态，一个是声音开始、
+   *    一个是静音超时，不属于「打断表情」。
    */
   private request(expression: ExpressionName): void {
     if (expression === this.expression.value) return
+
+    const current = this.priorityOf(this.expression.value)
+    const next = this.priorityOf(expression)
+    if (current === EMOTION_PRIORITY && next < EMOTION_PRIORITY) return
+
     this.enter(expression, 0)
   }
 

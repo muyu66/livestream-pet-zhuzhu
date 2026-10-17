@@ -167,9 +167,9 @@
 
 /* ------------------------------------------------------------------- float
  * 说话的底拍：快速向上浮起两次，下落走重力（越落越快），所以听起来是「说得很起劲」，
- * 而不是温柔地飘。它是全库唯一一个**专门为 lively 调过幅度**的动作（2026-10-16）：
+ * 而不是温柔地飘。它是 speaking 的底拍（2026-10-16 调大调快，2026-10-17 保持不动）：
  * `idle` 平静、`speaking` 眉飞色舞，这一组对比主要就落在这里 —— 幅度比待机大（bob 9px
- * 对 sway 的 3.5px）、节奏快（1200ms 对 6000ms）。theme.json 的 `_幅度_说明` 里记了这条例外。
+ * 对 sway 的 1.5px）、节奏快（1200ms 对 7000ms）。theme.json 的 `_幅度_说明` 里记了这条例外。
  * 两个下落段都不许过冲：角色下沿本来离窗口边只剩两三个像素，往下多走一点就被切掉了。
  */
 @keyframes pet-float {
@@ -197,7 +197,7 @@
 
 /* --------------------------------------------------------------- talk-sway
  * 说话时的偏头：一边说一边把头摆向一侧、停一拍，再带着一点反方向的小晃回正。
- * 与 idle 的 sway 的区别是幅度小、只有一次单边摆动、中间不带停顿 ——
+ * 与 idle 的 sway 的区别是**幅度更大**、只有一次单边摆动、中间不带停顿 ——
  * 它是「讲到兴头上侧一下头」，不是「站着发呆慢慢摇」。
  */
 @keyframes pet-talk-sway {
@@ -716,15 +716,15 @@
  * ========================================================================== */
 
 .pet-motion.is-sway {
-  animation: pet-sway var(--pet-duration, 6000ms) ease-in-out 1 both;
+  animation: pet-sway var(--pet-duration, 7000ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-breathe {
-  animation: pet-breathe var(--pet-duration, 3500ms) ease-in-out 1 both;
+  animation: pet-breathe var(--pet-duration, 4200ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-drift {
-  animation: pet-drift var(--pet-duration, 4500ms) ease-in-out 1 both;
+  animation: pet-drift var(--pet-duration, 6000ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-float {
@@ -732,19 +732,19 @@
 }
 
 .pet-motion.is-talk-sway {
-  animation: pet-talk-sway var(--pet-duration, 1800ms) ease-in-out 1 both;
+  animation: pet-talk-sway var(--pet-duration, 1500ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-talk-pump {
-  animation: pet-talk-pump var(--pet-duration, 760ms) ease-in-out 1 both;
+  animation: pet-talk-pump var(--pet-duration, 620ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-talk-lean {
-  animation: pet-talk-lean var(--pet-duration, 900ms) cubic-bezier(0.3, 0.85, 0.45, 1) 1 both;
+  animation: pet-talk-lean var(--pet-duration, 800ms) cubic-bezier(0.3, 0.85, 0.45, 1) 1 both;
 }
 
 .pet-motion.is-talk-tilt {
-  animation: pet-talk-tilt var(--pet-duration, 1600ms) ease-in-out 1 both;
+  animation: pet-talk-tilt var(--pet-duration, 1350ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-hold {
@@ -780,7 +780,7 @@
 }
 
 .pet-motion.is-nod {
-  animation: pet-nod var(--pet-duration, 1000ms) ease-in-out 1 both;
+  animation: pet-nod var(--pet-duration, 850ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-squash {
@@ -788,7 +788,7 @@
 }
 
 .pet-motion.is-pop {
-  animation: pet-pop var(--pet-duration, 850ms) cubic-bezier(0.22, 0.9, 0.45, 1) 1 both;
+  animation: pet-pop var(--pet-duration, 700ms) cubic-bezier(0.22, 0.9, 0.45, 1) 1 both;
 }
 
 .pet-motion.is-flip {
