@@ -24,12 +24,12 @@ const MOTION_FALLBACK = 'hold'
  *    所以渲染层始终是单层 `.pet-motion`，不需要为「动作叠加」再套一层 DOM。
  *  - **没有冷却时间**：序列里的 `hold`（停顿）就承担了原来冷却的作用（DEV.md §4.4）。
  *    同一个表情重复触发一律忽略，否则「连着说两次开心」会让动画永远停在第一步。
- *  - 中途来了别的表情：**等当前这一拍演完再换**（排队）。只有两种情况下立刻打断：
- *    来者优先级**严格更高**，或正在演的是**循环**表情（循环没有「完整的一个动作」可言，
- *    随便切在哪都不算切坏）。这样既不会把一个弹跳切两半，说话开始时角色也不会慢半拍。
- *  - 排队意味着**最坏延迟 = 当前这一拍的剩余时长**，所以一次性表情的每一步别超过
- *    两秒半左右（见 animations.css 顶部）。排队的只会是优先级不高于当前的情绪，
- *    本来就不急。
+ *  - 中途来了别的表情：**立刻打断**，从新表情的第 0 步开始演（2026-10-17 改）。
+ *    模型/后端确认新表情时，画面上就不该再留着旧表情的尾巴；代价是正在演的那一拍
+ *    会被切在半路，但比起「新情绪已经很明显、角色还在慢慢收上一个动作」，
+ *    切一半反而更像活物。所以不再有排队槽，也不再需要优先级。
+ *  - **同一个表情重复触发一律忽略**：这不是打断，否则同一情绪每句话都从第 0 步重来，
+ *    会让序列退化成只演第一步。
  *  - 每一拍配一个**唯一**的兜底定时器，加上静音超时，同一时刻最多两个（见 pendingTimers）。
  *  - dispose() 清空全部定时器，程序退出后不遗留动画任务。
  */
@@ -49,8 +49,6 @@ export class AnimationScheduler {
   private baseExpression: ExpressionName
   /** 当前播放到 `motions` 的第几项 */
   private index = 0
-  /** 待切换的表情：当前这一拍演完就切过去。空槽用 null 表示 */
-  private queued: ExpressionName | null = null
   /** 当前这一拍的兜底定时器，同一时刻最多一个 */
   private stepTimer: ReturnType<typeof setTimeout> | null = null
   /** 静音超时定时器 */
@@ -93,8 +91,7 @@ export class AnimationScheduler {
     switch (kind) {
       case 'voice_start':
       case 'neutral':
-        // 说话是基准状态：切回基准，但基准变化本身不打断正在演的情绪序列，
-        // 要走优先级判断（speaking 的优先级高于 idle、低于任何情绪）。
+        // 说话是基准状态：一开口就切回 speaking（若正在演情绪，也会被立即打断）。
         this.voiceActive.value = true
         this.baseExpression = this.theme.baseState.voiceActive
         this.request(this.baseExpression)
@@ -143,10 +140,6 @@ export class AnimationScheduler {
     return this.theme.expressions[expression]?.motions ?? []
   }
 
-  private priorityOf(expression: ExpressionName): number {
-    return this.theme.expressions[expression]?.priority ?? 0
-  }
-
   private motionDuration(motion: MotionName): number {
     return this.theme.motions[motion]?.durationMs ?? UNKNOWN_MOTION_MS
   }
@@ -154,30 +147,12 @@ export class AnimationScheduler {
   /**
    * 请求演一个表情。
    *
-   * 三种结果：已经在演（忽略）／当前可以立刻让位（打断）／否则（排队等这一拍收尾）。
+   * 已经在演的就忽略（避免同一情绪重复触发时序列卡在第 0 步），
+   * 否则**立刻从第 0 步开始演**，不管当前演到哪、也不管是谁更「优先」。
    */
   private request(expression: ExpressionName): void {
-    // 已经在演这个表情：什么都不做。
-    // 不是「太近了先跳过」（那才是冷却），是「它正在演的那一列里就有停顿」——
-    // 重新从第 0 步开始的话，连着来两次同一个情绪会让序列永远停在第一步。
     if (expression === this.expression.value) return
-
-    // 两条立刻让位的理由：
-    //  1. 优先级严格更高 —— 情绪比正在演的更急，哪怕把动作切两半也要换（原行为）；
-    //  2. 正在演的是**循环**表情 —— 它本来就没有「一个完整的动作」可言（每一步都是
-    //     从头循环的第 N 拍，随便切在哪都不算切坏），所以谁来都能立刻接上。
-    //     这一条正是「开始说话时角色要马上跟上」：idle 是循环的，voice_start 立刻生效，
-    //     不会让角色呆呆地摆完手里那一拍。
-    const looping = this.theme.expressions[this.expression.value]?.loop ?? false
-    if (looping || this.priorityOf(expression) > this.priorityOf(this.expression.value)) {
-      this.enter(expression, 0)
-      return
-    }
-
-    // 排队。槽里只留一个：已经排着更高优先级的就不被顶掉，否则后来者替换它
-    // —— 同等紧急的情况下，用户刚说的那句更重要。
-    if (this.queued !== null && this.priorityOf(this.queued) > this.priorityOf(expression)) return
-    this.queued = expression
+    this.enter(expression, 0)
   }
 
   /** 进入某个表情的第 index 步 */
@@ -207,7 +182,7 @@ export class AnimationScheduler {
 
   /** 这一拍演完了（animationend 或兜底定时器），决定下一步演什么 */
   private finishStep(motion: MotionName): void {
-    // 期间可能已经被更高优先级的事件切走了，或已经换到下一拍了
+    // 期间可能已经被新表情切走了，或已经换到下一拍了
     if (this.motion.value !== motion) return
 
     // 挡掉上一拍迟到的 animationend：这一拍的动画至少要演到九成才算演完。
@@ -219,15 +194,8 @@ export class AnimationScheduler {
     this.advance()
   }
 
-  /** 走到下一步：优先切到排队中的表情，其次本列表的下一步，最后回基础表情 */
+  /** 走到下一步：本列表的下一步，演完就回基础表情 */
   private advance(): void {
-    const queued = this.queued
-    if (queued !== null) {
-      this.queued = null
-      this.enter(queued, 0)
-      return
-    }
-
     const list = this.steps(this.expression.value)
     const next = this.index + 1
     if (next < list.length) {
@@ -240,10 +208,8 @@ export class AnimationScheduler {
       return
     }
 
-    // 非循环序列演完了，回基础表情。这里**不再走优先级判断**：
-    // 我们本来就站在步骤边界上，而且「没得演了」只能回基准，
-    // 再排一次队会白等一拍（角色会以最后一帧的静止姿态多站一会儿）。
-    this.queued = null
+    // 非循环序列演完了，回基础表情。直接 enter，不走 request ——
+    // 这一步本来就是序列的自然收尾，没什么可「打断」的。
     this.enter(this.baseExpression, 0)
   }
 

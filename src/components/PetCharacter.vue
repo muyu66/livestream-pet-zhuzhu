@@ -39,6 +39,7 @@ const CSS_VARS: Array<[keyof MotionParams, string]> = [
   ['shake', '--pet-shake'],
   ['sink', '--pet-sink'],
   ['pop', '--pet-pop'],
+  ['zoom', '--pet-zoom'],
   ['squash', '--pet-squash'],
   ['spin', '--pet-spin'],
   ['persp', '--pet-persp'],

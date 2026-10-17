@@ -145,10 +145,10 @@ impl Default for StabilityConfig {
     fn default() -> Self {
         Self {
             idle_timeout_ms: 4000,
-            // 2 次一致性：连续两次说话都被判成同一情绪才切动画。
-            // 直播时人是一句接一句说的，通常一两秒内就能确认，又不至于把
-            // 单次误判直接放到动画上。
-            emotion_consistency_windows: 2,
+            // 1 次一致性：判到就报，交给 event_debounce_ms / emotion_hold_ms 兜底。
+            // 原先默认 2，实测同一句话反复说时 SenseVoice 会在 NEUTRAL/ANGRY 之间跳，
+            // 交替的标签永远凑不齐连续两次，日志里有情绪而动画一直不出。
+            emotion_consistency_windows: 1,
             event_debounce_ms: 1200,
             emotion_hold_ms: 1800,
         }

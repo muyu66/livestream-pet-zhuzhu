@@ -32,9 +32,9 @@
   },
 
   "stability": {
-    "_说明": "把不稳定的模型输出变成稳定动画事件。模型不给置信度，所以用一致性+冷却代替阈值筛选。emotion_consistency_windows 是「连续多少个语音段情绪一致才切动画」，窗口跨语音段累计、不按时间清空，所以同一情绪每句话都能重新触发，只有「换情绪」才需要重新攒够窗口；想更灵敏就调成 1，想更稳就调大。",
+    "_说明": "把不稳定的模型输出变成稳定动画事件。模型不给置信度，所以用一致性+冷却代替阈值筛选。emotion_consistency_windows 是「连续多少个语音段情绪一致才切动画」，窗口跨语音段累计、不按时间清空，所以同一情绪每句话都能重新触发，只有「换情绪」才需要重新攒够窗口；想更灵敏就调成 1，想更稳就调大。**当前设为 1**：实测同一句话反复说时 SenseVoice 会在 NEUTRAL/ANGRY 之间来回跳，窗口为 2 时交替的标签永远凑不齐，日志里明明有 ANGRY 却一个动画都不出。代价是单段误判也会直接上屏，靠下面的 event_debounce_ms / emotion_hold_ms 兜底；如果以后觉得表情乱闪，先把它调回 2 再考虑改算法。",
     "idle_timeout_ms": 4000,
-    "emotion_consistency_windows": 2,
+    "emotion_consistency_windows": 1,
     "event_debounce_ms": 1200,
     "emotion_hold_ms": 1800
   }

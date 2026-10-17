@@ -67,6 +67,10 @@ pub fn parse_emotion(tag: &str) -> Emotion {
         "SAD" => Emotion::Sad,
         "SURPRISED" => Emotion::Surprised,
         "NEUTRAL" => Emotion::Neutral,
+        // 模型明确表示「这段判不出情绪」（静音、噪声、太短、语气音）。
+        // 这是正常结果，不是「出现了没映射的新标签」，所以不刷 debug 日志。
+        // `[语音段]` 日志仍会原样打印这个标签，方便排查。
+        "EMO_UNKNOWN" => Emotion::Unknown,
         "" => Emotion::Unknown,
         other => {
             log::debug!("未映射的情绪标签: <|{other}|>");
@@ -305,6 +309,8 @@ mod tests {
         // 第一版不处理这两类，必须是 Unknown 而不是被硬映射
         assert_eq!(parse_emotion("<|FEARFUL|>"), Emotion::Unknown);
         assert_eq!(parse_emotion("<|DISGUSTED|>"), Emotion::Unknown);
+        // 模型明确说「判不出情绪」，同样归为 Unknown（且不算未映射标签）
+        assert_eq!(parse_emotion("<|EMO_UNKNOWN|>"), Emotion::Unknown);
     }
 
     #[test]

@@ -195,6 +195,125 @@
   }
 }
 
+/* --------------------------------------------------------------- talk-sway
+ * 说话时的偏头：一边说一边把头摆向一侧、停一拍，再带着一点反方向的小晃回正。
+ * 与 idle 的 sway 的区别是幅度小、只有一次单边摆动、中间不带停顿 ——
+ * 它是「讲到兴头上侧一下头」，不是「站着发呆慢慢摇」。
+ */
+@keyframes pet-talk-sway {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  18% {
+    transform: translate3d(calc(var(--pet-drift, 2.5px) * -1), calc(var(--pet-bob, 2px) * -0.5), 0)
+      rotate(calc(var(--pet-tilt, 2.4deg) * -1));
+  }
+  /* 偏着头说一小段：平台，不是停下来 */
+  38% {
+    transform: translate3d(calc(var(--pet-drift, 2.5px) * -1), calc(var(--pet-bob, 2px) * -0.5), 0)
+      rotate(calc(var(--pet-tilt, 2.4deg) * -1));
+  }
+  /* 回程冲过中线一点点，再收住 */
+  62% {
+    transform: translate3d(calc(var(--pet-drift, 2.5px) * 0.6), calc(var(--pet-bob, 2px) * 0.2), 0)
+      rotate(calc(var(--pet-tilt, 2.4deg) * 0.55));
+  }
+  82% {
+    transform: translate3d(calc(var(--pet-drift, 2.5px) * -0.15), 0, 0)
+      rotate(calc(var(--pet-tilt, 2.4deg) * -0.1));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+/* --------------------------------------------------------------- talk-pump
+ * 句子里的小重音：快速上浮 → 落回 → 再轻轻上浮一次 → 收住。
+ * 比 float 更轻、更快、幅度更小，用来在一句话中间换气，不让底拍显得机械。
+ * 两个最高点都接着重力曲线，落下来是「掉」而不是「飘」。
+ */
+@keyframes pet-talk-pump {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  22% {
+    animation-timing-function: linear(0, 0.2 32%, 0.6 66%, 1);
+    transform: translate3d(calc(var(--pet-drift, 1.5px) * -0.6), calc(var(--pet-bob, 5px) * -1), 0)
+      rotate(calc(var(--pet-tilt, 1.2deg) * -1));
+  }
+  40% {
+    transform: translate3d(calc(var(--pet-drift, 1.5px) * 0.25), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.2deg) * 0.2));
+  }
+  58% {
+    animation-timing-function: linear(0, 0.2 32%, 0.6 66%, 1);
+    transform: translate3d(calc(var(--pet-drift, 1.5px) * 0.6), calc(var(--pet-bob, 5px) * -0.7), 0)
+      rotate(calc(var(--pet-tilt, 1.2deg) * 0.75));
+  }
+  78% {
+    transform: translate3d(calc(var(--pet-drift, 1.5px) * -0.15), 0, 0)
+      rotate(calc(var(--pet-tilt, 1.2deg) * -0.12));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+/* ----------------------------------------------------------------- talk-lean
+ * 压低强调：下沉一点、同时略微放大（像把脸凑近镜头），压住一拍再弹回来。
+ * 这是 speaking 里唯一「往下」的动作，专门演重音；下沉幅度比 nod 还小，
+ * 所以只会被窗口下沿切掉几个像素（和 nod 同量级）。
+ */
+@keyframes pet-talk-lean {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  16% {
+    transform: translate3d(0, var(--pet-bob, 3px), 0)
+      rotate(calc(var(--pet-tilt, 1deg) * -1)) scale(var(--pet-zoom, 1.03));
+  }
+  /* 压住一拍：强调的点就落在这里 */
+  40% {
+    transform: translate3d(0, var(--pet-bob, 3px), 0)
+      rotate(calc(var(--pet-tilt, 1deg) * -1)) scale(var(--pet-zoom, 1.03));
+  }
+  /* 回升冲过一点再收住 */
+  64% {
+    animation-timing-function: linear(0, 0.78 36%, 1.04 66%, 0.99 86%, 1);
+    transform: translate3d(0, calc(var(--pet-bob, 3px) * -0.1), 0) rotate(0deg)
+      scale(calc(1 + (var(--pet-zoom, 1.03) - 1) * 0.15));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+}
+
+/* --------------------------------------------------------------- talk-tilt
+ * 歪头：慢慢偏到一侧停住，像在听人说话 / 想措辞，再回正。
+ * 与 sad 的 tilt 同名不同调：这里角度小得多、也快得多，没有「倒下去」的沉重感。
+ */
+@keyframes pet-talk-tilt {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  24% {
+    transform: translate3d(calc(var(--pet-drift, 1.5px) * -1), 0, 0)
+      rotate(var(--pet-tilt, 3deg));
+  }
+  /* 歪着头停一拍 */
+  52% {
+    transform: translate3d(calc(var(--pet-drift, 1.5px) * -1), 0, 0)
+      rotate(var(--pet-tilt, 3deg));
+  }
+  76% {
+    transform: translate3d(calc(var(--pet-drift, 1.5px) * 0.2), 0, 0)
+      rotate(calc(var(--pet-tilt, 3deg) * -0.12));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
 /* -------------------------------------------------------------------- hold
  * 停顿：全程中性、什么都不做，序列里的间隔（代替冷却时间）。
  *
@@ -610,6 +729,22 @@
 
 .pet-motion.is-float {
   animation: pet-float var(--pet-duration, 1200ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-talk-sway {
+  animation: pet-talk-sway var(--pet-duration, 1800ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-talk-pump {
+  animation: pet-talk-pump var(--pet-duration, 760ms) ease-in-out 1 both;
+}
+
+.pet-motion.is-talk-lean {
+  animation: pet-talk-lean var(--pet-duration, 900ms) cubic-bezier(0.3, 0.85, 0.45, 1) 1 both;
+}
+
+.pet-motion.is-talk-tilt {
+  animation: pet-talk-tilt var(--pet-duration, 1600ms) ease-in-out 1 both;
 }
 
 .pet-motion.is-hold {

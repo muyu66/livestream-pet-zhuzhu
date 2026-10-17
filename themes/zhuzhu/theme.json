@@ -64,6 +64,30 @@
       "params": { "bob": "9px", "drift": "3px", "tilt": "2.4deg" }
     },
 
+    "talk-sway": {
+      "说明": "说话时偏头：一边说一边把头摆向一侧、平台一小段，再带着反方向的小晃回正 —— 讲到兴头上侧一下头。",
+      "durationMs": 1800,
+      "params": { "tilt": "2.4deg", "drift": "2.5px", "bob": "2px" }
+    },
+
+    "talk-pump": {
+      "说明": "句子里的小重音：快速上浮、落回、再轻浮一次，比 float 更轻更快，用来在长句中间换气。",
+      "durationMs": 760,
+      "params": { "bob": "5px", "drift": "1.5px", "tilt": "1.2deg" }
+    },
+
+    "talk-lean": {
+      "说明": "压低强调：下沉一点并略微放大（像把脸凑近镜头），压住一拍再弹回，专门演重音。",
+      "durationMs": 900,
+      "params": { "bob": "3px", "tilt": "1deg", "zoom": "1.03" }
+    },
+
+    "talk-tilt": {
+      "说明": "歪头：慢慢偏到一侧停住，像在听人说话或想措辞，再回正；比 sad 的 tilt 小得多、也快得多。",
+      "durationMs": 1600,
+      "params": { "tilt": "3deg", "drift": "1.5px" }
+    },
+
     "hold": {
       "说明": "停顿：完全静止地待住。序列里的间隔，用来代替冷却时间（DEV.md §4.2）。",
       "durationMs": 1200,
@@ -137,29 +161,29 @@
     }
   },
 
-  "_expressions_说明": "表情 = 一张图 + 一列按时间顺序播放的动作（依次播放，不是叠加，任何时刻只有一个变换在演）。图缺失或文件不存在时回退到 assets.base。loop 只有 idle / speaking 为 true —— 其余表情播完这一列就回基础表情。priority 只决定「能不能打断正在播的序列」：严格更高才立刻切过去，否则排队等当前这一步收尾（DEV.md §4.4）。序列里**相邻两项不能是同一个动作**（靠换 class 触发 CSS 动画，同名的话那一步不会重播），fit_check.py 会报错。每个表情还可以写 `mirror` 覆盖上面那个朝向开关。",
+  "_expressions_说明": "表情 = 一张图 + 一列按时间顺序播放的动作（依次播放，不是叠加，任何时刻只有一个变换在演）。图缺失或文件不存在时回退到 assets.base。loop 只有 idle / speaking 为 true —— 其余表情播完这一列就回基础表情。**新表情一律立刻打断当前序列**，从新表情的第 0 步开始演；同一个表情重复触发则忽略（DEV.md §4.4）。序列里**相邻两项不能是同一个动作**（靠换 class 触发 CSS 动画，同名的话那一步不会重播），fit_check.py 会报错。每个表情还可以写 `mirror` 覆盖上面那个朝向开关。",
 
   "expressions": {
     "idle": {
       "说明": "待机：摆一摆 → 停 → 左右漂移 → 停 → 深呼吸 → 停，一直循环。",
       "image": "expressions/idle.png",
-      "priority": 0,
       "loop": true,
       "motions": ["sway", "hold", "drift", "hold", "breathe", "hold"]
     },
 
     "speaking": {
-      "说明": "说话：跟着语气快速起伏 → 应一声 → 再起伏 → 强调处放大一下，一直循环。**中间一个 `hold` 都不插** —— 说话不该有停顿，这是它与 idle 最显眼的区别（idle 是慢动作 + 三段停顿）。",
+      "说明": "说话：跟着语气快速起伏 → 应一声 → 偏头摆一下 → 小重音 → 再起伏 → 强调处放大 → 压低强调 → 歪头听一拍 → 再起伏 → 收尾的小重音，一直循环。十拍里用了七种不同动作，整轮约 11.3s —— 没有情绪事件时也不会像 4 秒短循环那样很快露出重复。**中间一个 `hold` 都不插** —— 说话不该有停顿，这是它与 idle 最显眼的区别（idle 是慢动作 + 三段停顿）。",
       "image": "expressions/speaking.png",
-      "priority": 1,
       "loop": true,
-      "motions": ["float", "nod", "float", "pop"]
+      "motions": [
+        "float", "nod", "talk-sway", "talk-pump", "float",
+        "pop", "talk-lean", "talk-tilt", "float", "talk-pump"
+      ]
     },
 
     "sad": {
       "说明": "难过：慢慢沉下去 → 停 → 再慢慢倒向一侧 → 停，然后回待机。",
       "image": "expressions/sad.png",
-      "priority": 2,
       "loop": false,
       "motions": ["sink", "hold", "tilt", "hold"]
     },
@@ -167,7 +191,6 @@
     "happy": {
       "说明": "开心：欢快地弹两下 → 停 → 翻个身，然后回待机。",
       "image": "expressions/happy.png",
-      "priority": 3,
       "loop": false,
       "motions": ["hop", "hold", "hop", "hold", "flip"]
     },
@@ -175,7 +198,6 @@
     "angry": {
       "说明": "生气：气鼓鼓地抖一阵 → 停 → 扭两下身子 → 停，然后回待机。",
       "image": "expressions/angry.png",
-      "priority": 3,
       "loop": false,
       "motions": ["shake", "hold", "wiggle", "hold"]
     },
@@ -183,7 +205,6 @@
     "surprised": {
       "说明": "惊讶：猛地跳起来，落地压一下，再放大一下，然后回待机。",
       "image": "expressions/surprised.png",
-      "priority": 4,
       "loop": false,
       "motions": ["jump", "squash", "pop", "hold"]
     },
@@ -191,7 +212,6 @@
     "laugh": {
       "说明": "大笑：连着弹两阵，每阵之间停一下。",
       "image": "expressions/laugh.png",
-      "priority": 4,
       "loop": false,
       "motions": ["bounce", "hold", "bounce", "hold"]
     }

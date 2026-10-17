@@ -50,6 +50,8 @@ export interface MotionParams {
   sink?: string
   /** 放大倍数，如 "1.12" */
   pop?: string
+  /** 放大倍数（与 pop 分开命名：pop 是「弹一下」的动作参数，zoom 是「凑近镜头」的持续姿态） */
+  zoom?: string
   /** 压缩比例，如 "0.94"（小于 1） */
   squash?: string
   /** 绕 Y 轴翻转的角度，如 "-180deg"（flip 用；±180 才是完整的翻到另一面） */
@@ -86,8 +88,6 @@ export interface ExpressionConfig {
    * —— 这是 DEV.md §4.5 的硬性要求。
    */
   image?: string
-  /** 数字越大越优先；只有**严格更高**才能打断正在播的序列 */
-  priority: number
   /** true = 整列无限循环（只有 idle / speaking 是）；false = 播一遍就回基础表情 */
   loop: boolean
   /**
